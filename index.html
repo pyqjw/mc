@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebCraft 生存模式</title>
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hud"></div>
+  <div id="screen" class="overlay" style="display:none"></div>
+  <div id="cursor-item"></div>
+  <div id="tooltip"></div>
+
+  <div id="pause" class="overlay dim" style="display:none">
+    <div class="menu">
+      <h2>游戏菜单</h2>
+      <button class="mc-btn" id="btn-resume">回到游戏</button>
+      <div class="settings">
+        <label>渲染距离: <span id="lbl-rd"></span> 区块<input type="range" id="set-rd" min="2" max="16" step="1" /></label>
+        <label>视野 (FOV): <span id="lbl-fov"></span><input type="range" id="set-fov" min="50" max="110" step="1" /></label>
+        <label>鼠标灵敏度: <span id="lbl-sens"></span>%<input type="range" id="set-sens" min="20" max="300" step="5" /></label>
+        <label>音量: <span id="lbl-vol"></span>%<input type="range" id="set-vol" min="0" max="100" step="5" /></label>
+        <label class="check"><input type="checkbox" id="set-bob" /> 视角摇晃</label>
+      </div>
+      <button class="mc-btn" id="btn-quit">保存并退回标题画面</button>
+    </div>
+  </div>
+
+  <div id="death" class="overlay death" style="display:none">
+    <div class="menu">
+      <h1>你死了！</h1>
+      <p id="death-cause"></p>
+      <button class="mc-btn" id="btn-respawn">重生</button>
+      <button class="mc-btn" id="btn-death-quit">标题画面</button>
+    </div>
+  </div>
+
+  <div id="title" class="overlay title-bg">
+    <div class="menu" id="title-main">
+      <h1 class="logo">WEBCRAFT</h1>
+      <div class="splash">无限世界！</div>
+      <button class="mc-btn" id="btn-singleplayer">单人游戏</button>
+      <button class="mc-btn" id="btn-help">操作说明</button>
+      <p class="version">生存模式 · 无限地图 · 浏览器版</p>
+    </div>
+    <div class="menu wide" id="title-worlds" style="display:none">
+      <h2>选择世界</h2>
+      <div id="world-list"></div>
+      <div class="row">
+        <button class="mc-btn" id="btn-new-world">创建新的世界</button>
+        <button class="mc-btn" id="btn-back">返回</button>
+      </div>
+    </div>
+    <div class="menu" id="title-create" style="display:none">
+      <h2>创建新的世界</h2>
+      <label>世界名称<input type="text" id="new-name" maxlength="32" value="新的世界" /></label>
+      <label>世界生成器的种子（留空则随机）<input type="text" id="new-seed" maxlength="40" /></label>
+      <p class="hint">游戏模式：生存</p>
+      <div class="row">
+        <button class="mc-btn" id="btn-create">创建新的世界</button>
+        <button class="mc-btn" id="btn-create-cancel">取消</button>
+      </div>
+    </div>
+    <div class="menu wide" id="title-help" style="display:none">
+      <h2>操作说明</h2>
+      <div class="help">
+        <p><b>W A S D</b> 移动 · <b>空格</b> 跳跃/上浮 · <b>Shift</b> 潜行 · <b>双击 W</b> 或 <b>Ctrl</b> 疾跑</p>
+        <p><b>鼠标左键</b> 挖掘方块 / 攻击生物 · <b>鼠标右键</b> 放置方块 / 使用物品 / 打开工作台、熔炉、箱子 / 进食</p>
+        <p><b>1-9 / 滚轮</b> 切换快捷栏 · <b>E</b> 物品栏 · <b>Q</b> 丢弃物品 · <b>F3</b> 调试信息 · <b>F1</b> 隐藏界面 · <b>Esc</b> 暂停</p>
+        <p>物品栏中：左键拿起/放下，右键拿一半/放一个，Shift+左键快速移动，悬停时按数字键与快捷栏交换。</p>
+        <p><b>生存指南：</b>先徒手撸树获得原木 → 合成木板 → 合成工作台 → 木镐 → 挖石头做石器 → 用煤炭和木棍做火把，夜晚来临前建好庇护所！
+          夜晚会刷出僵尸和苦力怕。吃东西恢复饥饿值，饥饿值高时会自然回血。用熔炉烧炼铁矿石获得铁锭。床可以跳过夜晚并设置重生点。</p>
+      </div>
+      <button class="mc-btn" id="btn-help-back">返回</button>
+    </div>
+  </div>
+
+  <div id="loading" class="overlay title-bg" style="display:none">
+    <div class="menu">
+      <h2 id="loading-text">正在生成地形…</h2>
+      <div class="progress"><div id="loading-bar"></div></div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

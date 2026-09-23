@@ -1,0 +1,792 @@
+// Game session: owns the world, player, entities and UI, and runs the frame / tick loop.
+import * as THREE from 'three';
+import { World } from './world/world.js';
+import { raycast } from './world/raycast.js';
+import { B, BLOCKS, IS_SOLID, IS_FLUID, RENDER } from './world/blocks.js';
+import { BIOME_NAMES } from './world/generator.js';
+import { WORLD_HEIGHT } from './constants.js';
+import { Player } from './entity/player.js';
+import { MobManager } from './entity/mobs.js';
+import { DropManager } from './entity/drops.js';
+import { Particles } from './entity/particles.js';
+import { Hand } from './render/hand.js';
+import { HUD } from './ui/hud.js';
+import { Screens } from './ui/screens.js';
+import { getItem, I, ITEMS } from './items.js';
+
+const REACH = 4.5;
+const ENTITY_REACH = 3;
+
+const DEATH_MESSAGES = {
+  fall: '从高处摔了下来',
+  lava: '试图在熔岩里游泳',
+  drown: '淹死了',
+  starve: '饿死了',
+  mob: '被怪物杀死了',
+  explosion: '被炸死了',
+  cactus: '被仙人掌戳死了',
+  void: '掉出了这个世界',
+};
+
+export class Game {
+  constructor(app, renderer, storage, audio, input, settings) {
+    this.app = app;
+    this.renderer = renderer;
+    this.storage = storage;
+    this.audio = audio;
+    this.input = input;
+    this.settings = settings;
+    this.running = false;
+    this.paused = false;
+    this.tickAcc = 0;
+    this.time = 1000;
+    this.daylight = 1;
+    this.mining = null;
+    this.miningCooldown = 0;
+    this.useCooldown = 0;
+    this.usingItem = null;
+    this.useTime = 0;
+    this.sleepFade = 0;
+    this.sleeping = false;
+    this.fps = 0;
+    this.frames = 0;
+    this.fpsTime = 0;
+    this.saveTimer = 0;
+    this.tmpV = new THREE.Vector3();
+    this.target = null;
+  }
+
+  async load(meta) {
+    this.meta = meta;
+    this.world = new World({
+      seed: meta.seed, worldId: meta.id, storage: this.storage, scene: this.renderer.scene, materials: this.renderer.materials,
+    });
+    this.world.game = this;
+    this.world.renderDistance = this.settings.renderDistance;
+    await this.world.init();
+    this.player = new Player(this);
+    this.mobs = new MobManager(this);
+    this.drops = new DropManager(this);
+    this.particles = new Particles(this);
+    this.hand = new Hand();
+    this.hand.resize(window.innerWidth, window.innerHeight);
+    this.renderer.onResize = (w, h) => this.hand.resize(w, h);
+    this.hud = new HUD(this);
+    this.screens = new Screens(this);
+
+    this.time = meta.time ?? 1000;
+    if (!meta.spawn) meta.spawn = this.world.generator.findSpawn();
+    if (meta.player) {
+      this.player.load(meta.player);
+    } else {
+      this.player.pos.set(meta.spawn.x, meta.spawn.y, meta.spawn.z);
+      this.player.yaw = Math.PI * 0.75;
+      this.needsSafeSpot = true;
+      this.searchGround = true;
+    }
+  }
+
+  // Waits for the terrain around the player; calls onProgress(0..1).
+  async waitForTerrain(onProgress) {
+    return new Promise((resolve) => {
+      const step = () => {
+        const p = this.player.pos;
+        this.world.update(p.x, p.z);
+        const prog = this.world.loadingProgress(p.x, p.z, 2);
+        onProgress(prog);
+        if (prog >= 1) resolve();
+        else setTimeout(step, 50);
+      };
+      step();
+    });
+  }
+
+  start() {
+    this.running = true;
+    this.last = performance.now();
+    if (this.player.dead) this.showDeath();
+    const loop = (t) => {
+      if (!this.running) return;
+      this.frame(t);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+
+  // ------------------------------------------------------------------ main loop
+  frame(now) {
+    const dt = Math.min(0.1, (now - this.last) / 1000);
+    this.last = now;
+    this.frames++;
+    this.fpsTime += dt;
+    if (this.fpsTime >= 1) {
+      this.fps = Math.round(this.frames / this.fpsTime);
+      this.frames = 0;
+      this.fpsTime = 0;
+    }
+    const input = this.input;
+    const player = this.player;
+    const active = input.locked && !this.screens.isOpen && !player.dead && !this.paused;
+
+    const mouse = input.consumeMouse();
+    if (active) {
+      const sens = 0.0022 * this.settings.sensitivity;
+      player.yaw -= mouse.dx * sens;
+      player.pitch -= mouse.dy * sens;
+      player.pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, player.pitch));
+      if (mouse.wheel) {
+        player.inventory.selected = (((player.inventory.selected + mouse.wheel) % 9) + 9) % 9;
+      }
+      for (let i = 1; i <= 9; i++) if (input.pressed.has(`Digit${i}`)) player.inventory.selected = i - 1;
+    }
+
+    if (!this.paused) {
+      if (this.needsSafeSpot) this.findSafeSpot();
+      this.tickAcc += dt;
+      let n = 0;
+      while (this.tickAcc >= 0.05 && n < 5) {
+        this.tick();
+        this.tickAcc -= 0.05;
+        n++;
+      }
+      if (n >= 5) this.tickAcc = 0;
+      const noInput = { movement: () => ({ forward: 0, strafe: 0, jump: false, sneak: false, sprint: false }) };
+      const pinput = active ? input : noInput;
+      // Physics in small steps for stability.
+      let rem = dt;
+      while (rem > 0) {
+        const step = Math.min(rem, 1 / 60);
+        player.update(step, pinput);
+        rem -= step;
+      }
+      this.interact(dt, active);
+      this.mobs.update(dt);
+      this.drops.update(dt);
+      this.particles.update(dt);
+      this.updateSleep(dt);
+    }
+    this.world.update(player.pos.x, player.pos.z);
+
+    // Camera.
+    const cam = this.renderer.camera;
+    const eye = player.eyePos(this.tmpV);
+    const bob = this.settings.viewBobbing ? player.bobAmount : 0;
+    cam.position.set(
+      eye.x + Math.cos(player.yaw) * Math.sin(player.bobPhase) * 0.05 * bob,
+      eye.y - Math.abs(Math.cos(player.bobPhase)) * 0.07 * bob,
+      eye.z - Math.sin(player.yaw) * Math.sin(player.bobPhase) * 0.05 * bob,
+    );
+    cam.rotation.set(player.pitch, player.yaw, player.hurtTime > 0 ? Math.sin(player.hurtTime * 9) * 0.06 : 0);
+    const fovTarget = this.settings.fov * (player.sprinting ? 1.12 : 1);
+    cam.fov += (fovTarget - cam.fov) * Math.min(1, dt * 10);
+    cam.updateProjectionMatrix();
+    this.audio.listener = { x: eye.x, y: eye.y, z: eye.z };
+
+    const dayTime = this.time % 24000;
+    const eyeFluid = player.eyeFluid;
+    this.daylight = this.renderer.updateSky(dayTime, this.world.renderDistance, eyeFluid === B.WATER, eyeFluid === B.LAVA);
+    this.renderer.updateFollow(cam.position, this.time);
+
+    // Held item.
+    const hand = player.inventory.hand;
+    const light = this.world.getLight(Math.floor(eye.x), Math.floor(eye.y), Math.floor(eye.z));
+    const lb = Math.max(0.1, light / 15);
+    this.hand.update(dt, {
+      heldId: hand ? hand.id : 0, bobPhase: player.bobPhase, bobAmount: bob, light: lb * lb * 0.5 + lb * 0.5, eating: !!this.usingItem,
+    });
+
+    this.renderer.render(this.settings.hideHud ? null : this.hand.scene, this.hand.camera);
+    this.hud.update(dt);
+    this.screens.update();
+    input.endFrame();
+  }
+
+  tick() {
+    if (!this.sleeping) this.time++;
+    const day = this.daylight;
+    this.world.skyDarken = Math.round((1 - (day - 0.25) / 0.75) * 11);
+    this.world.tick(this.player.pos.x, this.player.pos.z);
+    this.player.tick();
+    this.mobs.tick();
+    this.saveTimer++;
+    if (this.saveTimer >= 20 * 30) {
+      this.saveTimer = 0;
+      this.save();
+    }
+  }
+
+  // ------------------------------------------------------------------ interaction
+  interact(dt, active) {
+    const player = this.player;
+    const input = this.input;
+    const inv = player.inventory;
+    if (this.miningCooldown > 0) this.miningCooldown -= dt;
+    if (this.useCooldown > 0) this.useCooldown -= dt;
+
+    const eye = player.eyePos(new THREE.Vector3());
+    const dir = player.lookDir(new THREE.Vector3());
+    const hit = active ? raycast(this.world, eye, dir, REACH) : null;
+    const mobHit = active ? this.mobs.raycast(eye, dir, ENTITY_REACH) : null;
+    const targetMob = mobHit && (!hit || mobHit.dist < hit.dist) ? mobHit.mob : null;
+    this.target = hit;
+
+    if (hit && !targetMob && !this.settings.hideHud) {
+      const b = hit.box;
+      this.renderer.setHighlight([hit.x + b[0], hit.y + b[1], hit.z + b[2], hit.x + b[3], hit.y + b[4], hit.z + b[5]]);
+    } else {
+      this.renderer.setHighlight(null);
+    }
+
+    if (!active) {
+      this.mining = null;
+      this.renderer.setCrack(null);
+      this.stopUsing();
+      return;
+    }
+
+    // Drop item.
+    if (input.pressed.has('KeyQ')) {
+      const s = inv.hand;
+      if (s) {
+        const n = input.down('ControlLeft') || input.down('ControlRight') ? s.count : 1;
+        this.dropFromPlayer({ id: s.id, count: n, damage: s.damage });
+        inv.consumeHand(n);
+        this.hand.startSwing();
+      }
+    }
+
+    // Attack / mine.
+    if (input.clicked.has(0)) {
+      this.hand.startSwing();
+      if (targetMob) this.attack(targetMob);
+    }
+    if (input.buttons.has(0) && !targetMob && hit && this.miningCooldown <= 0) {
+      const same = this.mining && this.mining.x === hit.x && this.mining.y === hit.y && this.mining.z === hit.z && this.mining.id === hit.id;
+      if (!same) this.mining = { x: hit.x, y: hit.y, z: hit.z, id: hit.id, progress: 0, soundTimer: 0 };
+      const m = this.mining;
+      const time = this.breakTime(hit.id);
+      if (time === Infinity) {
+        m.progress = 0;
+      } else {
+        m.progress += time === 0 ? 1 : dt / time;
+        m.soundTimer -= dt;
+        if (m.soundTimer <= 0) {
+          m.soundTimer = 0.25;
+          this.stepSound(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 0.35, hit.id);
+          this.hand.startSwing();
+        }
+      }
+      if (m.progress >= 1) {
+        this.playerBreak(hit.x, hit.y, hit.z);
+        this.mining = null;
+        this.miningCooldown = time === 0 ? 0.15 : 0.3;
+      }
+      const b = hit.box;
+      this.renderer.setCrack(this.mining ? [hit.x + b[0], hit.y + b[1], hit.z + b[2], hit.x + b[3], hit.y + b[4], hit.z + b[5]] : null,
+        this.mining ? Math.floor(this.mining.progress * 10) : -1);
+    } else {
+      if (!input.buttons.has(0)) this.mining = null;
+      this.renderer.setCrack(null);
+    }
+
+    // Use / place (right button).
+    if (input.buttons.has(2)) {
+      if (this.usingItem) {
+        this.continueUsing(dt);
+      } else if (input.clicked.has(2) || this.useCooldown <= 0) {
+        this.useCooldown = 0.2;
+        this.use(hit, targetMob, eye, dir);
+      }
+    } else {
+      this.stopUsing();
+    }
+  }
+
+  breakTime(id) {
+    const b = BLOCKS[id];
+    if (b.hardness < 0) return Infinity;
+    if (b.hardness === 0) return 0;
+    const s = this.player.inventory.hand;
+    const tool = s ? getItem(s.id)?.tool : null;
+    let speed = 1;
+    if (tool && tool.type === b.tool) speed = tool.speed;
+    if (tool && tool.type === 'sword' && b.leaves) speed = 1.5;
+    const canHarvest = b.harvestLevel < 0 || (tool && tool.type === 'pickaxe' && tool.tier >= b.harvestLevel);
+    if (!this.player.onGround && !this.player.inWater) speed /= 5;
+    if (this.player.eyeFluid === B.WATER) speed /= 5;
+    const perTick = speed / b.hardness / (canHarvest ? 30 : 100);
+    if (perTick > 1) return 0;
+    return Math.ceil(1 / perTick) / 20;
+  }
+
+  playerBreak(x, y, z) {
+    const world = this.world;
+    const id = world.getBlock(x, y, z);
+    if (id <= 0) return;
+    const meta = world.getMeta(x, y, z);
+    const s = this.player.inventory.hand;
+    const tool = s ? getItem(s.id)?.tool : null;
+    this.particles.blockBreak(x, y, z, id);
+    this.stepSound(x + 0.5, y + 0.5, z + 0.5, 0.9, id);
+    world.setBlock(x, y, z, B.AIR);
+    if (id === B.ICE) {
+      const below = world.getBlock(x, y - 1, z);
+      if (below > 0 && below !== B.AIR) world.setBlock(x, y, z, B.WATER);
+    }
+    this.spawnBlockDrops(x, y, z, id, meta, tool);
+    if (tool && BLOCKS[id].hardness > 0) {
+      if (this.player.inventory.damageHand(tool.type === 'sword' ? 2 : 1)) this.sound('break_tool');
+    }
+    this.player.exhaustion += 0.005;
+  }
+
+  spawnBlockDrops(x, y, z, id, meta, tool) {
+    const b = BLOCKS[id];
+    if (!b) return;
+    if (b.harvestLevel >= 0 && !(tool && tool.type === 'pickaxe' && tool.tier >= b.harvestLevel)) return;
+    const drops = b.drops ? b.drops(Math.random, tool, meta) : [[id, 1]];
+    for (const [did, n] of drops) {
+      if (n > 0 && ITEMS[did]) this.dropItem(x + 0.5, y + 0.4, z + 0.5, { id: did, count: n });
+    }
+  }
+
+  attack(mob) {
+    const player = this.player;
+    const s = player.inventory.hand;
+    const tool = s ? getItem(s.id)?.tool : null;
+    let dmg = tool ? tool.damage : 1;
+    const crit = player.vel.y < 0 && !player.onGround && !player.inWater;
+    if (crit) {
+      dmg *= 1.5;
+      this.particles.smoke(mob.pos.x, mob.pos.y + mob.height * 0.7, mob.pos.z, 6, 0xffffaa, 0.12, 3, 0.4);
+    }
+    if (mob.damage(dmg, player.pos, player.sprinting ? 1.6 : 1)) {
+      if (tool && player.inventory.damageHand(tool.type === 'sword' ? 1 : 2)) this.sound('break_tool');
+      player.exhaustion += 0.1;
+      if (player.sprinting) player.sprinting = false;
+    }
+  }
+
+  use(hit, targetMob, eye, dir) {
+    const player = this.player;
+    const inv = player.inventory;
+    const world = this.world;
+    const s = inv.hand;
+    const item = s ? getItem(s.id) : null;
+
+    // Interact with blocks first (unless sneaking with an item).
+    if (hit && !(player.sneaking && s)) {
+      const b = BLOCKS[hit.id];
+      if (b.interact) {
+        this.hand.startSwing();
+        this.interactBlock(hit, b.interact);
+        return;
+      }
+    }
+    if (!item) return;
+
+    if (item.food) {
+      if (player.food < 20 || item.food.always) {
+        this.usingItem = { id: s.id, slot: inv.selected };
+        this.useTime = 0;
+      }
+      return;
+    }
+
+    if (item.bucket) {
+      this.useBucket(item, eye, dir);
+      return;
+    }
+
+    if (item.tool && item.tool.type === 'hoe' && hit && hit.normal[1] === 1) {
+      if ((hit.id === B.GRASS || hit.id === B.DIRT) && world.getBlock(hit.x, hit.y + 1, hit.z) === 0) {
+        world.setBlock(hit.x, hit.y, hit.z, B.FARMLAND);
+        this.stepSound(hit.x + 0.5, hit.y + 1, hit.z + 0.5, 0.8, B.DIRT);
+        this.hand.startSwing();
+        if (inv.damageHand(1)) this.sound('break_tool');
+        // Tilling grass can drop seeds from the tall grass above in MC; keep it simple.
+      }
+      return;
+    }
+
+    if (item.placeBlock !== undefined && hit) this.placeBlock(hit, item.placeBlock);
+  }
+
+  placeBlock(hit, blockId) {
+    const world = this.world;
+    const player = this.player;
+    const target = BLOCKS[hit.id];
+    let x = hit.x;
+    let y = hit.y;
+    let z = hit.z;
+    if (!(target.replaceable && !IS_FLUID[hit.id])) {
+      x += hit.normal[0];
+      y += hit.normal[1];
+      z += hit.normal[2];
+    }
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    const cur = world.getBlock(x, y, z);
+    if (cur < 0 || !(cur === 0 || BLOCKS[cur].replaceable)) return;
+    const b = BLOCKS[blockId];
+    if (b.solid) {
+      const box = [x, y, z, x + 1, y + b.height, z + 1];
+      const hits = (e) => e.pos.x + e.halfW > box[0] && e.pos.x - e.halfW < box[3]
+        && e.pos.y + e.height > box[1] && e.pos.y < box[4]
+        && e.pos.z + e.halfW > box[2] && e.pos.z - e.halfW < box[5];
+      if (hits(player)) return;
+      for (const m of this.mobs.mobs) if (!m.dead && hits(m)) return;
+    }
+    if (b.support && !world.hasSupport(x, y, z, b.support)) return;
+    let meta = 0;
+    if (b.orientable) {
+      // Front faces the player.
+      const dx = -Math.sin(player.yaw);
+      const dz = -Math.cos(player.yaw);
+      let facing;
+      if (Math.abs(dx) > Math.abs(dz)) facing = dx > 0 ? 1 : 3;
+      else facing = dz > 0 ? 2 : 0;
+      meta = (facing + 2) % 4;
+    }
+    if (b.leaves) meta = 1; // player-placed leaves never decay
+    if (cur !== 0 && BLOCKS[cur].render === RENDER.CROSS) this.spawnBlockDrops(x, y, z, cur, 0, null);
+    world.setBlock(x, y, z, blockId, { meta });
+    this.player.inventory.consumeHand(1);
+    this.hand.startSwing();
+    this.stepSound(x + 0.5, y + 0.5, z + 0.5, 0.9, blockId);
+  }
+
+  interactBlock(hit, kind) {
+    const key = `${hit.x},${hit.y},${hit.z}`;
+    if (kind === 'crafting') this.openScreen('crafting');
+    else if (kind === 'furnace') {
+      const tile = this.world.tiles.get(key);
+      if (tile) this.openScreen('furnace', { tile });
+    } else if (kind === 'chest') {
+      const tile = this.world.tiles.get(key);
+      if (tile) this.openScreen('chest', { tile });
+    } else if (kind === 'bed') {
+      this.trySleep(hit);
+    }
+  }
+
+  trySleep(hit) {
+    const player = this.player;
+    player.spawn = { x: hit.x + 0.5, y: hit.y + 1, z: hit.z + 0.5 };
+    const t = this.time % 24000;
+    if (t < 12542 || t > 23459) {
+      this.hud.message('已设置重生点。你只能在夜间睡觉');
+      return;
+    }
+    const near = this.mobs.mobs.some((m) => m.def.hostile && !m.dead && m.pos.distanceTo(player.pos) < 8);
+    if (near) {
+      this.hud.message('你现在不能休息，周围有怪物在游荡');
+      return;
+    }
+    this.hud.message('已设置重生点');
+    this.sleeping = true;
+    this.sleepTimer = 0;
+  }
+
+  updateSleep(dt) {
+    if (this.sleeping) {
+      this.sleepTimer += dt;
+      this.sleepFade = Math.min(1, this.sleepTimer / 2);
+      if (this.sleepTimer > 2.5) {
+        this.time = (Math.floor(this.time / 24000) + 1) * 24000;
+        this.sleeping = false;
+      }
+    } else if (this.sleepFade > 0) {
+      this.sleepFade = Math.max(0, this.sleepFade - dt);
+    }
+  }
+
+  useBucket(item, eye, dir) {
+    const world = this.world;
+    const inv = this.player.inventory;
+    if (item.bucket === 'empty') {
+      const hit = raycast(world, eye, dir, REACH, { fluids: true });
+      if (!hit || !IS_FLUID[hit.id] || hit.meta !== 0) return;
+      world.setBlock(hit.x, hit.y, hit.z, B.AIR);
+      const filled = { id: hit.id === B.WATER ? I.WATER_BUCKET : I.LAVA_BUCKET, count: 1, damage: 0 };
+      if (inv.hand.count === 1) inv.slots[inv.selected] = filled;
+      else {
+        inv.consumeHand(1);
+        if (inv.add(filled) > 0) this.dropFromPlayer(filled);
+      }
+      this.sound('bucket');
+      this.hand.startSwing();
+      return;
+    }
+    const hit = raycast(world, eye, dir, REACH);
+    if (!hit) return;
+    let x = hit.x;
+    let y = hit.y;
+    let z = hit.z;
+    if (!BLOCKS[hit.id].replaceable) {
+      x += hit.normal[0];
+      y += hit.normal[1];
+      z += hit.normal[2];
+    }
+    const cur = world.getBlock(x, y, z);
+    if (cur < 0 || !(cur === 0 || BLOCKS[cur].replaceable)) return;
+    if (cur !== 0 && !IS_FLUID[cur]) this.spawnBlockDrops(x, y, z, cur, 0, null);
+    world.setBlock(x, y, z, item.bucket === 'water' ? B.WATER : B.LAVA);
+    inv.slots[inv.selected] = { id: I.BUCKET, count: 1, damage: 0 };
+    this.sound('bucket');
+    this.hand.startSwing();
+  }
+
+  continueUsing(dt) {
+    const inv = this.player.inventory;
+    const s = inv.hand;
+    if (!s || s.id !== this.usingItem.id || inv.selected !== this.usingItem.slot) {
+      this.stopUsing();
+      return;
+    }
+    this.useTime += dt;
+    if (Math.floor(this.useTime / 0.22) !== Math.floor((this.useTime - dt) / 0.22)) {
+      this.sound('eat', this.player.pos.x, this.player.pos.y + 1.5, this.player.pos.z);
+    }
+    if (this.useTime >= 1.6) {
+      const item = getItem(s.id);
+      this.player.eat(item.food);
+      inv.consumeHand(1);
+      this.sound('burp');
+      this.usingItem = null;
+      this.useCooldown = 0.3;
+    }
+  }
+
+  stopUsing() {
+    this.usingItem = null;
+    this.useTime = 0;
+  }
+
+  // ------------------------------------------------------------------ entities & world callbacks
+  dropItem(x, y, z, stack, vel = null, delay = 0.5) {
+    return this.drops.spawn(stack, x, y, z, vel, delay);
+  }
+
+  dropFromPlayer(stack) {
+    const p = this.player;
+    const eye = p.eyePos(new THREE.Vector3());
+    const dir = p.lookDir(new THREE.Vector3());
+    const vel = dir.clone().multiplyScalar(6);
+    vel.y += 1.5;
+    this.dropItem(eye.x, eye.y - 0.3, eye.z, stack, vel, 2);
+  }
+
+  isSolidBlock(id) {
+    return IS_SOLID[id] === 1;
+  }
+
+  onChunkGenerated(chunk) {
+    this.mobs.spawnAnimals(chunk);
+  }
+
+  entitiesInChunk(cx, cz, remove) {
+    return this.mobs.inChunk(cx, cz, remove);
+  }
+
+  restoreEntities(list) {
+    this.mobs.restore(list);
+  }
+
+  explosion(x, y, z, power) {
+    this.world.explode(x, y, z, power);
+    this.particles.explosion(x, y, z);
+    this.sound('explode', x, y, z);
+    const affect = (e, isPlayer) => {
+      const cx = e.pos.x;
+      const cy = e.pos.y + e.height / 2;
+      const cz = e.pos.z;
+      const d = Math.hypot(cx - x, cy - y, cz - z);
+      const r = power * 2;
+      if (d >= r) return;
+      const impact = 1 - d / r;
+      const dmg = Math.floor(((impact * impact + impact) / 2) * 7 * r + 1);
+      const k = impact * 14;
+      const nx = (cx - x) / (d || 1);
+      const nz = (cz - z) / (d || 1);
+      if (isPlayer) {
+        e.invulnerable = 0;
+        e.damage(dmg, 'explosion');
+      } else {
+        e.hurtTime = 0;
+        e.damage(dmg, null);
+      }
+      e.vel.x += nx * k;
+      e.vel.z += nz * k;
+      e.vel.y += impact * 8;
+    };
+    if (!this.player.dead) affect(this.player, true);
+    for (const m of this.mobs.mobs) if (!m.dead) affect(m, false);
+  }
+
+  sound(name, x, y, z, vol = 1) {
+    this.audio.play(name, x, y, z, vol);
+  }
+
+  // Footstep / dig sound for the block under or at a position.
+  stepSound(x, y, z, vol = 0.5, id = null) {
+    const bid = id ?? this.world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
+    if (!bid || bid <= 0) return;
+    const s = BLOCKS[bid].sound;
+    if (s) this.audio.play(s, x, y, z, vol);
+  }
+
+  // Moves the player up out of solid blocks (after spawning in a fresh chunk). For a brand new
+  // world, first look for open ground nearby so we do not start on top of a tree.
+  findSafeSpot() {
+    const p = this.player.pos;
+    if (!this.world.areaReady(p.x, p.z, 1)) return;
+    const world = this.world;
+    if (this.searchGround) {
+      this.searchGround = false;
+      for (let r = 0; r <= 12; r++) {
+        for (let dz = -r; dz <= r; dz++) {
+          for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+            const x = Math.floor(p.x) + dx;
+            const z = Math.floor(p.z) + dz;
+            const top = world.topY(x, z);
+            if (top < 0) continue;
+            const id = world.getBlock(x, top, z);
+            if (id === B.GRASS || id === B.SAND || id === B.SNOWY_GRASS || id === B.DIRT) {
+              p.set(x + 0.5, top + 1, z + 0.5);
+              this.meta.spawn = { x: p.x, y: p.y, z: p.z };
+              this.needsSafeSpot = false;
+              return;
+            }
+          }
+        }
+      }
+    }
+    const x = Math.floor(p.x);
+    const z = Math.floor(p.z);
+    let y = Math.max(1, Math.floor(p.y));
+    const free = (yy) => {
+      const a = world.getBlock(x, yy, z);
+      const b = world.getBlock(x, yy + 1, z);
+      return a >= 0 && b >= 0 && !IS_SOLID[a] && !IS_SOLID[b] && !IS_FLUID[a];
+    };
+    while (y < WORLD_HEIGHT - 2 && !free(y)) y++;
+    if (y !== Math.floor(p.y)) p.y = y;
+    this.needsSafeSpot = false;
+  }
+
+  // ------------------------------------------------------------------ screens & death
+  openScreen(kind, data) {
+    this.screens.open(kind, data);
+    this.stopUsing();
+    this.mining = null;
+    this.input.unlock();
+  }
+
+  closeScreen() {
+    this.screens.close();
+    this.input.lock();
+  }
+
+  onPlayerDeath(cause) {
+    const p = this.player;
+    for (let i = 0; i < p.inventory.slots.length; i++) {
+      const s = p.inventory.slots[i];
+      if (!s) continue;
+      const vel = new THREE.Vector3((Math.random() - 0.5) * 5, 3 + Math.random() * 2, (Math.random() - 0.5) * 5);
+      this.dropItem(p.pos.x, p.pos.y + 1, p.pos.z, s, vel, 1);
+      p.inventory.slots[i] = null;
+    }
+    if (this.screens.isOpen) this.screens.close();
+    this.deathCause = cause;
+    this.showDeath();
+    this.input.unlock();
+  }
+
+  showDeath() {
+    const el = document.getElementById('death');
+    el.style.display = 'flex';
+    document.getElementById('death-cause').textContent = `玩家${DEATH_MESSAGES[this.deathCause] || '死了'}`;
+  }
+
+  respawn() {
+    document.getElementById('death').style.display = 'none';
+    const spawn = this.player.spawn && this.bedStillThere(this.player.spawn) ? this.player.spawn : this.meta.spawn;
+    if (this.player.spawn && spawn !== this.player.spawn) {
+      this.hud.message('你的床已丢失或被阻挡');
+      this.player.spawn = null;
+    }
+    this.player.respawn(spawn);
+    this.needsSafeSpot = true;
+    this.input.lock();
+  }
+
+  bedStillThere(sp) {
+    const x = Math.floor(sp.x);
+    const y = Math.floor(sp.y) - 1;
+    const z = Math.floor(sp.z);
+    if (!this.world.isLoaded(x, z)) return true; // assume it is still there
+    return this.world.getBlock(x, y, z) === B.BED;
+  }
+
+  // ------------------------------------------------------------------ saving
+  async save() {
+    if (!this.world) return;
+    const meta = this.meta;
+    meta.time = this.time;
+    meta.player = this.player.toJSON();
+    meta.lastPlayed = Date.now();
+    try {
+      await this.storage.putWorld(JSON.parse(JSON.stringify(meta)));
+      await this.storage.putChunks(meta.id, this.world.dirtyRecords());
+    } catch (e) {
+      console.error('Save failed', e);
+    }
+  }
+
+  async quit() {
+    this.running = false;
+    await this.save();
+    this.dispose();
+  }
+
+  dispose() {
+    this.running = false;
+    this.mobs.clear();
+    this.drops.clear();
+    this.particles.clear();
+    this.world.dispose();
+    this.screens.destroy();
+    this.renderer.setHighlight(null);
+    this.renderer.setCrack(null);
+  }
+
+  debugText() {
+    const p = this.player.pos;
+    const w = this.world;
+    const x = Math.floor(p.x);
+    const y = Math.floor(p.y);
+    const z = Math.floor(p.z);
+    const col = w.generator.column(x, z);
+    const dirs = ['北 (-Z)', '西 (-X)', '南 (+Z)', '东 (+X)'];
+    const yaw = ((this.player.yaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const facing = dirs[Math.round(yaw / (Math.PI / 2)) % 4];
+    const day = Math.floor(this.time / 24000) + 1;
+    const t = this.time % 24000;
+    const hours = Math.floor(((t / 1000) + 6) % 24);
+    const mins = Math.floor(((t % 1000) / 1000) * 60);
+    const tgt = this.target ? `${BLOCKS[this.target.id].name} @ ${this.target.x} ${this.target.y} ${this.target.z}` : '无';
+    return [
+      `WebCraft 生存模式  ${this.fps} fps`,
+      `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
+      `区块: ${Math.floor(x / 16)} ${Math.floor(z / 16)}  (已加载 ${w.chunks.size})`,
+      `朝向: ${facing}`,
+      `生物群系: ${BIOME_NAMES[col.biome]}`,
+      `光照: ${w.getLight(x, y + 1, z)} (天空 ${w.getSkyLight(x, y + 1, z)}, 方块 ${w.getBlockLight(x, y + 1, z)})`,
+      `第 ${day} 天  ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
+      `生物: ${this.mobs.mobs.length}  掉落物: ${this.drops.items.length}`,
+      `种子: ${this.meta.seed}`,
+      `目标方块: ${tgt}`,
+    ].join('\n');
+  }
+}
