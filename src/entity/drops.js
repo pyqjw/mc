@@ -4,6 +4,7 @@ import { moveEntity, fluidSubmersion } from './physics.js';
 import { makeItemMesh, isCubeItem } from '../render/itemModels.js';
 import { B } from '../world/blocks.js';
 import { maxStack } from '../items.js';
+import { castShadow } from '../render/shadows.js';
 
 class ItemEntity {
   constructor(game, stack, x, y, z, vel, pickupDelay) {
@@ -29,6 +30,7 @@ class ItemEntity {
       this.mesh2.position.set(0.06, 0.06, 0.06);
       this.group.add(this.mesh2);
     }
+    castShadow(this.group);
     game.renderer.scene.add(this.group);
   }
 

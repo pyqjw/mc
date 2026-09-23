@@ -9,7 +9,7 @@ import { seedFromString } from './world/noise.js';
 
 const $ = (id) => document.getElementById(id);
 
-const DEFAULT_SETTINGS = { renderDistance: 6, fov: 70, sensitivity: 1, volume: 0.7, music: 0.5, viewBobbing: true, hideHud: false };
+const DEFAULT_SETTINGS = { renderDistance: 6, fov: 70, sensitivity: 1, volume: 0.7, music: 0.5, shaders: 'medium', viewBobbing: true, hideHud: false };
 
 function loadSettings() {
   try {
@@ -43,6 +43,7 @@ class App {
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
     this.game = null;
+    this.renderer.setQuality(this.settings.shaders);
     this.setupTitleBackground();
     this.bindMenus();
     this.bindSettings();
@@ -114,6 +115,13 @@ class App {
     bind('set-sens', 'lbl-sens', () => Math.round(s.sensitivity * 100), (v) => { s.sensitivity = v / 100; });
     bind('set-vol', 'lbl-vol', () => Math.round(s.volume * 100), (v) => { s.volume = v / 100; this.audio.setVolume(s.volume); });
     bind('set-music', 'lbl-music', () => Math.round(s.music * 100), (v) => { s.music = v / 100; this.audio.setMusicVolume(s.music); });
+    const shaders = $('set-shaders');
+    shaders.value = s.shaders;
+    shaders.onchange = () => {
+      s.shaders = shaders.value;
+      this.renderer.setQuality(s.shaders);
+      saveSettings(s);
+    };
     const bob = $('set-bob');
     bob.checked = s.viewBobbing;
     bob.onchange = () => { s.viewBobbing = bob.checked; saveSettings(s); };

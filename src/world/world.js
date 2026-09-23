@@ -839,6 +839,7 @@ export class World {
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
       if (k === 'translucent') mesh.renderOrder = 1;
+      else mesh.layers.enable(1); // casts sun shadows
       this.scene.add(mesh);
       c.meshes.push(mesh);
     }

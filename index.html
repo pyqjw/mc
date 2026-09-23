@@ -18,6 +18,11 @@
       <h2>游戏菜单</h2>
       <button class="mc-btn" id="btn-resume">回到游戏</button>
       <div class="settings">
+        <label>光影: <select id="set-shaders">
+          <option value="off">关闭（经典画面）</option>
+          <option value="medium">中（阴影 + 水面 + 泛光）</option>
+          <option value="high">高（柔和阴影 + 丁达尔光束）</option>
+        </select></label>
         <label>渲染距离: <span id="lbl-rd"></span> 区块<input type="range" id="set-rd" min="2" max="16" step="1" /></label>
         <label>视野 (FOV): <span id="lbl-fov"></span><input type="range" id="set-fov" min="50" max="110" step="1" /></label>
         <label>鼠标灵敏度: <span id="lbl-sens"></span>%<input type="range" id="set-sens" min="20" max="300" step="5" /></label>

@@ -2,51 +2,20 @@
 import * as THREE from 'three';
 import { getAtlasCanvas, makeCrackCanvases } from './textures.js';
 import { mulberry32 } from '../world/noise.js';
+import { CHUNK_VERT, CHUNK_FRAG } from './chunkShader.js';
+import { Shadows } from './shadows.js';
+import { PostFX } from './postfx.js';
+
+// Tilt of the sun's path so shadows fall at an angle (like most shader packs).
+const SUN_TILT = 0.4;
+
+export const SHADER_QUALITY = {
+  off: null,
+  medium: { shadowSize: 1024, shadowRadius: 48, bloom: true, rays: false },
+  high: { shadowSize: 2048, shadowRadius: 64, bloom: true, rays: true },
+};
 
 THREE.ColorManagement.enabled = false;
-
-const CHUNK_VERT = /* glsl */ `
-  attribute vec4 aLight;
-  varying vec2 vUv;
-  varying vec3 vLight;
-  varying float vDepth;
-  void main() {
-    vUv = uv;
-    vLight = aLight.xyz;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vDepth = length(mv.xyz);
-    gl_Position = projectionMatrix * mv;
-  }
-`;
-
-const CHUNK_FRAG = /* glsl */ `
-  uniform sampler2D map;
-  uniform float daylight;
-  uniform float alphaTest;
-  uniform float opacity;
-  uniform vec3 fogColor;
-  uniform float fogNear;
-  uniform float fogFar;
-  uniform float gamma;
-  varying vec2 vUv;
-  varying vec3 vLight;
-  varying float vDepth;
-  float curve(float l) {
-    float moody = l / (4.0 - 3.0 * l);
-    return mix(moody, l, gamma);
-  }
-  void main() {
-    vec4 tex = texture2D(map, vUv);
-    if (tex.a < alphaTest) discard;
-    float sky = curve(vLight.x * daylight);
-    float blk = curve(vLight.y);
-    vec3 light = max(vec3(sky), vec3(blk) * vec3(1.0, 0.92, 0.78));
-    light = max(light, vec3(0.035));
-    vec3 col = tex.rgb * light * vLight.z;
-    float f = smoothstep(fogNear, fogFar, vDepth);
-    gl_FragColor = vec4(mix(col, fogColor, f), tex.a * opacity);
-  }
-`;
 
 const SKY_VERT = /* glsl */ `
   varying vec3 vDir;
@@ -60,10 +29,18 @@ const SKY_FRAG = /* glsl */ `
   uniform vec3 topColor;
   uniform vec3 horizonColor;
   uniform vec3 bottomColor;
+  uniform vec3 sunDir;
+  uniform vec3 glowColor;
+  uniform float glow;
   varying vec3 vDir;
   void main() {
-    float h = normalize(vDir).y;
-    vec3 c = h > 0.0 ? mix(horizonColor, topColor, smoothstep(0.0, 0.45, h)) : mix(horizonColor, bottomColor, smoothstep(0.0, 0.2, -h));
+    vec3 d = normalize(vDir);
+    float h = d.y;
+    float s = max(dot(d, sunDir), 0.0);
+    // Sunset colours are strongest on the side of the sky where the sun is.
+    vec3 hor = mix(horizonColor, glowColor, pow(s, 3.0) * glow);
+    vec3 c = h > 0.0 ? mix(hor, topColor, smoothstep(0.0, 0.45, h)) : mix(hor, bottomColor, smoothstep(0.0, 0.2, -h));
+    c += glowColor * (pow(s, 6.0) * 0.25 + pow(s, 60.0) * 0.5) * (0.35 + glow);
     gl_FragColor = vec4(c, 1.0);
   }
 `;
@@ -99,7 +76,21 @@ export class Renderer {
       fogNear: { value: 60 },
       fogFar: { value: 100 },
       gamma: { value: 0.45 },
+      time: { value: 0 },
+      shadowMap: { value: null },
+      shadowMatrix: { value: new THREE.Matrix4() },
+      shadowTexel: { value: 1 / 1024 },
+      lightDir: { value: new THREE.Vector3(0, 1, 0) },
+      lightColor: { value: new THREE.Color(1, 1, 1) },
+      ambientColor: { value: new THREE.Color(0.5, 0.55, 0.65) },
+      sunDir: { value: new THREE.Vector3(0, 1, 0) },
+      skyTop: { value: new THREE.Color() },
+      skyHorizon: { value: new THREE.Color() },
     };
+    this.quality = 'off';
+    this.shadows = null;
+    this.post = null;
+    this.sunScreen = new THREE.Vector2();
     const mk = (props, alphaTest, opacity) => new THREE.ShaderMaterial({
       vertexShader: CHUNK_VERT,
       fragmentShader: CHUNK_FRAG,
@@ -124,6 +115,7 @@ export class Renderer {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    if (this.post) this.post.setSize(w, h);
     if (this.onResize) this.onResize(w, h);
   }
 
@@ -132,6 +124,9 @@ export class Renderer {
       topColor: { value: new THREE.Color() },
       horizonColor: { value: new THREE.Color() },
       bottomColor: { value: new THREE.Color() },
+      sunDir: this.uniforms.sunDir,
+      glowColor: { value: new THREE.Color(1, 0.6, 0.3) },
+      glow: { value: 0 },
     };
     const dome = new THREE.Mesh(
       new THREE.SphereGeometry(900, 24, 12),
@@ -144,8 +139,11 @@ export class Renderer {
     this.skyDome = dome;
     this.scene.add(dome);
 
+    this.celestialTilt = new THREE.Group();
+    this.celestialTilt.rotation.x = SUN_TILT;
+    this.scene.add(this.celestialTilt);
     this.celestial = new THREE.Group();
-    this.scene.add(this.celestial);
+    this.celestialTilt.add(this.celestial);
 
     const sunCanvas = document.createElement('canvas');
     sunCanvas.width = sunCanvas.height = 32;
@@ -157,6 +155,7 @@ export class Renderer {
     sctx.fillStyle = '#ffffe8';
     sctx.fillRect(10, 10, 12, 12);
     const sunMat = new THREE.MeshBasicMaterial({ map: canvasTexture(sunCanvas), transparent: true, depthWrite: false, fog: false });
+    this.sunMat = sunMat;
     this.sun = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), sunMat);
     this.sun.position.set(700, 0, 0);
     this.sun.lookAt(0, 0, 0);
@@ -277,6 +276,27 @@ export class Renderer {
 
     const daylight = 0.25 + 0.75 * day;
     this.uniforms.daylight.value = daylight;
+
+    // Sun direction on the tilted path, and the light used for shadows (sun by day, moon by night).
+    const sunDir = new THREE.Vector3(Math.cos(angle), sunY * Math.cos(SUN_TILT), sunY * Math.sin(SUN_TILT)).normalize();
+    this.uniforms.sunDir.value.copy(sunDir);
+    const u = this.uniforms;
+    if (sunY > -0.04) {
+      u.lightDir.value.copy(sunDir);
+      const warm = THREE.MathUtils.smoothstep(sunY, 0.0, 0.4);
+      const k = THREE.MathUtils.smoothstep(sunY, -0.04, 0.12) * 0.78;
+      u.lightColor.value.setRGB(1.0, 0.5 + 0.43 * warm, 0.25 + 0.6 * warm).multiplyScalar(k);
+    } else {
+      u.lightDir.value.copy(sunDir).negate();
+      const k = THREE.MathUtils.smoothstep(-sunY, 0.04, 0.2) * 0.22;
+      u.lightColor.value.setRGB(0.55, 0.65, 1.0).multiplyScalar(k);
+    }
+    u.ambientColor.value.setRGB(0.06 + 0.26 * day, 0.07 + 0.31 * day, 0.13 + 0.4 * day);
+    if (glow > 0) u.ambientColor.value.lerp(new THREE.Color(0.55, 0.42, 0.4), glow * 0.4);
+    this.skyUniforms.glow.value = glow;
+    this.skyUniforms.glowColor.value.setRGB(1.0, 0.55 + 0.35 * day * (1 - glow), 0.3 + 0.5 * day * (1 - glow));
+    if (sunY < -0.1) this.skyUniforms.glowColor.value.setRGB(0.1, 0.12, 0.2);
+    this.sunMat.color.setScalar(this.quality === 'off' ? 1 : 2.6);
     const far = renderDistance * 16;
     if (underwater) {
       const c = new THREE.Color(0.08, 0.2, 0.55).multiplyScalar(0.3 + 0.7 * daylight);
@@ -303,26 +323,85 @@ export class Renderer {
     this.skyUniforms.topColor.value.copy(top);
     this.skyUniforms.horizonColor.value.copy(horizon);
     this.skyUniforms.bottomColor.value.copy(horizon).multiplyScalar(0.6);
+    u.skyTop.value.copy(top);
+    u.skyHorizon.value.copy(horizon);
+    this.underwater = underwater;
+    this.dayFactor = day;
     this.cloudMat.color.setScalar(0.25 + 0.75 * day);
+    if (glow > 0 && sunY > -0.1) this.cloudMat.color.lerp(new THREE.Color(1.0, 0.6, 0.45), glow * 0.7);
     this.clouds.visible = !underwater && !inLava;
     return daylight;
   }
 
   updateFollow(camPos, time) {
     this.skyDome.position.copy(camPos);
-    this.celestial.position.copy(camPos);
+    this.celestialTilt.position.copy(camPos);
     this.clouds.position.set(camPos.x, 140, camPos.z);
     const size = 1536 / 8; // world units per texture repeat
     const drift = time * 0.02;
     this.cloudTex.offset.set((camPos.x + drift) / size, -camPos.z / size);
   }
 
+  // 'off' | 'medium' | 'high'
+  setQuality(q) {
+    const cfg = SHADER_QUALITY[q];
+    this.quality = cfg ? q : 'off';
+    if (this.shadows) { this.shadows.dispose(); this.shadows = null; }
+    if (this.post) { this.post.dispose(); this.post = null; }
+    for (const m of Object.values(this.materials)) {
+      m.defines = cfg ? { SHADERS: 1, WAVING: 1 } : {};
+      m.needsUpdate = true;
+    }
+    if (!cfg) {
+      this.uniforms.shadowMap.value = null;
+      return;
+    }
+    this.shadows = new Shadows(cfg.shadowSize, cfg.shadowRadius, this.atlas, this.uniforms.time);
+    this.uniforms.shadowMap.value = this.shadows.target.depthTexture;
+    this.uniforms.shadowTexel.value = this.shadows.texel;
+    this.post = new PostFX(this.renderer, { bloom: cfg.bloom, rays: cfg.rays });
+    this.post.setSize(window.innerWidth, window.innerHeight);
+  }
+
   render(extraScene, extraCamera) {
-    this.renderer.clear();
-    this.renderer.render(this.scene, this.camera);
+    const r = this.renderer;
+    this.uniforms.time.value = performance.now() / 1000;
+    if (this.quality !== 'off' && this.post) {
+      const u = this.uniforms;
+      const lit = u.lightColor.value.r + u.lightColor.value.g > 0.02;
+      if (lit) {
+        this.shadows.update(this.camera.position, u.lightDir.value);
+        this.shadows.render(r, this.scene);
+        u.shadowMatrix.value.copy(this.shadows.matrix);
+      }
+      r.setRenderTarget(this.post.target);
+      r.clear();
+      r.render(this.scene, this.camera);
+      // Sun rays when the sun is in front of the camera.
+      const sp = this.uniforms.sunDir.value.clone().multiplyScalar(500).add(this.camera.position).project(this.camera);
+      const facing = this.camera.getWorldDirection(new THREE.Vector3()).dot(this.uniforms.sunDir.value);
+      let rays = 0;
+      if (facing > 0 && Math.abs(sp.x) < 1.6 && Math.abs(sp.y) < 1.6 && !this.underwater) {
+        rays = Math.min(1, facing * 1.5) * THREE.MathUtils.smoothstep(this.uniforms.sunDir.value.y, -0.05, 0.1) * 0.9;
+      }
+      this.sunScreen.set(sp.x * 0.5 + 0.5, sp.y * 0.5 + 0.5);
+      const day = this.dayFactor ?? 1;
+      this.post.finish({
+        sunScreen: this.sunScreen,
+        rayStrength: rays,
+        rayColor: u.lightColor.value,
+        bloom: this.underwater ? 0.4 : 0.22,
+        exposure: 0.9 + (1 - day) * 0.05,
+        tint: this.underwater ? new THREE.Color(0.85, 0.95, 1.1) : new THREE.Color(1.02, 1.0, 0.97),
+      });
+    } else {
+      r.setRenderTarget(null);
+      r.clear();
+      r.render(this.scene, this.camera);
+    }
     if (extraScene) {
-      this.renderer.clearDepth();
-      this.renderer.render(extraScene, extraCamera);
+      r.clearDepth();
+      r.render(extraScene, extraCamera);
     }
   }
 }

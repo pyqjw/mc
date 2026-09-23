@@ -4,6 +4,7 @@ import { moveEntity, fluidSubmersion } from './physics.js';
 import { B, IS_SOLID, IS_OPAQUE, BLOCKS } from '../world/blocks.js';
 import { I } from '../items.js';
 import { mulberry32 } from '../world/noise.js';
+import { castShadow } from '../render/shadows.js';
 
 const PX = 1 / 16;
 
@@ -327,6 +328,7 @@ export class Mob {
     this.model = this.def.model(this.def, { atlas, material: this.material });
     this.object = this.model.root;
     this.object.position.copy(this.pos);
+    castShadow(this.object);
     game.renderer.scene.add(this.object);
   }
 

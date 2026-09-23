@@ -27,6 +27,13 @@ const queue = new Int32Array(QUEUE_SIZE);
 // Block heights for partial blocks (beds, farmland).
 const BLOCK_HEIGHT = new Float32Array(256).fill(1);
 for (const b of BLOCKS) if (b) BLOCK_HEIGHT[b.id] = b.height;
+// Vertex flags read by the shader-pack path (see render/chunkShader.js).
+const FLAG_LEAVES = 128;
+const FLAG_WATER = 180;
+const FLAG_WATER_TOP = 200;
+const FLAG_PLANT_TOP = 255;
+const IS_LEAVES = new Uint8Array(256);
+for (const b of BLOCKS) if (b && b.leaves) IS_LEAVES[b.id] = 1;
 
 function ri(x, y, z) {
   return x + z * RS + y * RA;
@@ -171,7 +178,7 @@ class GeometryBuilder {
     this.cap = cap;
   }
 
-  vertex(x, y, z, u, v, s, b, shade) {
+  vertex(x, y, z, u, v, s, b, shade, flag = 0) {
     const n = this.vc++;
     this.pos[n * 3] = x;
     this.pos[n * 3 + 1] = y;
@@ -181,7 +188,7 @@ class GeometryBuilder {
     this.light[n * 4] = s;
     this.light[n * 4 + 1] = b;
     this.light[n * 4 + 2] = shade;
-    this.light[n * 4 + 3] = 255;
+    this.light[n * 4 + 3] = flag;
   }
 
   quad(flip) {
@@ -315,7 +322,7 @@ function emitCube(g, id, meta, x, y, z, lx, lz, height) {
       }
       const [u, vv] = tileUV(tile, FACE_UV[v][0], fv);
       g.vertex(lx + c[0], y + py, lz + c[2], u, vv,
-        Math.round((ss / n) * 17), Math.round((sb / n) * 17), Math.round(face.shade * AO_CURVE[ao] * 255));
+        Math.round((ss / n) * 17), Math.round((sb / n) * 17), Math.round(face.shade * AO_CURVE[ao] * 255), IS_LEAVES[id] ? FLAG_LEAVES : 0);
     }
     g.quad(aos[0] + aos[2] < aos[1] + aos[3]);
   }
@@ -345,7 +352,8 @@ function emitLiquid(g, id, meta, x, y, z, lx, lz) {
       const py = c[1] * h;
       const fv = f === 2 || f === 3 ? FACE_UV[v][1] : FACE_UV[v][1] * h;
       const [u, vv] = tileUV(tile, FACE_UV[v][0], fv);
-      g.vertex(lx + c[0], y + py, lz + c[2], u, vv, s * 17, b * 17, Math.round(face.shade * 255));
+      const flag = id === B.WATER ? (c[1] === 1 && h < 1 ? FLAG_WATER_TOP : FLAG_WATER) : 0;
+      g.vertex(lx + c[0], y + py, lz + c[2], u, vv, s * 17, b * 17, Math.round(face.shade * 255), flag);
     }
     g.quad(false);
   }
@@ -367,7 +375,7 @@ function emitCross(g, id, meta, x, y, z, lx, lz) {
     for (let v = 0; v < 4; v++) {
       const c = q[v];
       const [u, vv] = tileUV(tile, FACE_UV[v][0], FACE_UV[v][1]);
-      g.vertex(lx + c[0], y + c[1] + yOff, lz + c[2], u, vv, s, b, 230);
+      g.vertex(lx + c[0], y + c[1] + yOff, lz + c[2], u, vv, s, b, 230, c[1] === 1 ? FLAG_PLANT_TOP : 0);
     }
     g.quad(false);
   }
