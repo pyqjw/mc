@@ -2,14 +2,14 @@
 import { Renderer } from './render/renderer.js';
 import { getAtlasCanvas } from './render/textures.js';
 import { Storage } from './storage.js';
-import { Audio } from './audio.js';
+import { Audio } from './audio/engine.js';
 import { Input } from './input.js';
 import { Game } from './game.js';
 import { seedFromString } from './world/noise.js';
 
 const $ = (id) => document.getElementById(id);
 
-const DEFAULT_SETTINGS = { renderDistance: 6, fov: 70, sensitivity: 1, volume: 0.6, viewBobbing: true, hideHud: false };
+const DEFAULT_SETTINGS = { renderDistance: 6, fov: 70, sensitivity: 1, volume: 0.7, music: 0.5, viewBobbing: true, hideHud: false };
 
 function loadSettings() {
   try {
@@ -37,6 +37,11 @@ class App {
     this.input = new Input(this.canvas);
     this.settings = loadSettings();
     this.audio.volume = this.settings.volume;
+    this.audio.musicVolume = this.settings.music;
+    // Browsers only allow audio after a user gesture.
+    const unlock = () => this.audio.resume();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
     this.game = null;
     this.setupTitleBackground();
     this.bindMenus();
@@ -107,7 +112,8 @@ class App {
     });
     bind('set-fov', 'lbl-fov', () => s.fov, (v) => { s.fov = v; });
     bind('set-sens', 'lbl-sens', () => Math.round(s.sensitivity * 100), (v) => { s.sensitivity = v / 100; });
-    bind('set-vol', 'lbl-vol', () => Math.round(s.volume * 100), (v) => { s.volume = v / 100; this.audio.volume = s.volume; });
+    bind('set-vol', 'lbl-vol', () => Math.round(s.volume * 100), (v) => { s.volume = v / 100; this.audio.setVolume(s.volume); });
+    bind('set-music', 'lbl-music', () => Math.round(s.music * 100), (v) => { s.music = v / 100; this.audio.setMusicVolume(s.music); });
     const bob = $('set-bob');
     bob.checked = s.viewBobbing;
     bob.onchange = () => { s.viewBobbing = bob.checked; saveSettings(s); };
@@ -176,6 +182,7 @@ class App {
     await game.waitForTerrain((p) => { $('loading-bar').style.width = `${Math.round(p * 100)}%`; });
     $('loading').style.display = 'none';
     game.start();
+    if (this.audio.music) this.audio.music.soon(20);
     game.hud.message('点击画面开始游戏。按 E 打开物品栏，F3 查看坐标。', 6);
     if (!meta.player) game.hud.message('提示：先徒手撸树获取原木吧！', 8);
     game.save();

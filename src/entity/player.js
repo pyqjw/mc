@@ -156,9 +156,9 @@ export class Player {
       if (this.fallDistance > 3) {
         const dmg = Math.ceil(this.fallDistance - 3);
         this.damage(dmg, 'fall');
-        this.game.sound(dmg > 4 ? 'fall_big' : 'fall_small', this.pos.x, this.pos.y, this.pos.z);
+        this.game.sound(dmg > 4 ? 'fall.big' : 'fall.small', this.pos.x, this.pos.y, this.pos.z);
       } else if (this.fallDistance > 0.8) {
-        this.game.stepSound(this.pos.x, this.pos.y - 0.2, this.pos.z, 0.6);
+        this.game.stepSound(this.pos.x, this.pos.y - 0.2, this.pos.z, 1.2);
       }
       this.fallDistance = 0;
     }
@@ -173,9 +173,20 @@ export class Player {
       this.stepSoundDist += moved;
       if (this.stepSoundDist > 1.7 && !this.sneaking) {
         this.stepSoundDist = 0;
-        this.game.stepSound(this.pos.x, this.pos.y - 0.2, this.pos.z, 0.35);
+        this.game.stepSound(this.pos.x, this.pos.y - 0.2, this.pos.z, this.sprinting ? 1.1 : 0.8);
+      }
+    } else if (fluid) {
+      this.swimDist = (this.swimDist || 0) + moved;
+      if (this.swimDist > 2.2) {
+        this.swimDist = 0;
+        this.game.sound('swim', this.pos.x, this.pos.y + 1, this.pos.z);
       }
     }
+    // Splash when falling into water.
+    if (this.inWater > 0 && !this.wasInWater && this.vel.y < -3) {
+      this.game.sound('splash', this.pos.x, this.pos.y, this.pos.z, Math.min(1, -this.vel.y / 12 + 0.3));
+    }
+    this.wasInWater = this.inWater > 0;
     const targetBob = this.onGround ? Math.min(1, moved / dt / WALK) : 0;
     this.bobAmount += (targetBob - this.bobAmount) * Math.min(1, dt * 10);
     this.bobPhase = this.walkDist * Math.PI * 0.62;
@@ -251,7 +262,7 @@ export class Player {
     this.hurtTime = 0.35;
     this.exhaustion += 0.1;
     this.lastDamageCause = cause;
-    this.game.sound('hurt', this.pos.x, this.pos.y + 1, this.pos.z);
+    this.game.sound('hurt');
     if (from) {
       const dx = this.pos.x - from.x;
       const dz = this.pos.z - from.z;

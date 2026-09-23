@@ -13,6 +13,8 @@ import { Hand } from './render/hand.js';
 import { HUD } from './ui/hud.js';
 import { Screens } from './ui/screens.js';
 import { getItem, I, ITEMS } from './items.js';
+import { blockSound } from './audio/sounds.js';
+import { BIOMES } from './world/generator.js';
 
 const REACH = 4.5;
 const ENTITY_REACH = 3;
@@ -180,12 +182,12 @@ export class Game {
     const fovTarget = this.settings.fov * (player.sprinting ? 1.12 : 1);
     cam.fov += (fovTarget - cam.fov) * Math.min(1, dt * 10);
     cam.updateProjectionMatrix();
-    this.audio.listener = { x: eye.x, y: eye.y, z: eye.z };
 
     const dayTime = this.time % 24000;
     const eyeFluid = player.eyeFluid;
     this.daylight = this.renderer.updateSky(dayTime, this.world.renderDistance, eyeFluid === B.WATER, eyeFluid === B.LAVA);
     this.renderer.updateFollow(cam.position, this.time);
+    this.updateAudio(dt);
 
     // Held item.
     const hand = player.inventory.hand;
@@ -272,7 +274,7 @@ export class Game {
         m.soundTimer -= dt;
         if (m.soundTimer <= 0) {
           m.soundTimer = 0.25;
-          this.stepSound(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 0.35, hit.id);
+          this.blockSound('hit', hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, hit.id);
           this.hand.startSwing();
         }
       }
@@ -327,7 +329,7 @@ export class Game {
     const s = this.player.inventory.hand;
     const tool = s ? getItem(s.id)?.tool : null;
     this.particles.blockBreak(x, y, z, id);
-    this.stepSound(x + 0.5, y + 0.5, z + 0.5, 0.9, id);
+    this.blockSound('break', x + 0.5, y + 0.5, z + 0.5, id);
     world.setBlock(x, y, z, B.AIR);
     if (id === B.ICE) {
       const below = world.getBlock(x, y - 1, z);
@@ -401,7 +403,7 @@ export class Game {
     if (item.tool && item.tool.type === 'hoe' && hit && hit.normal[1] === 1) {
       if ((hit.id === B.GRASS || hit.id === B.DIRT) && world.getBlock(hit.x, hit.y + 1, hit.z) === 0) {
         world.setBlock(hit.x, hit.y, hit.z, B.FARMLAND);
-        this.stepSound(hit.x + 0.5, hit.y + 1, hit.z + 0.5, 0.8, B.DIRT);
+        this.blockSound('place', hit.x + 0.5, hit.y + 1, hit.z + 0.5, B.DIRT);
         this.hand.startSwing();
         if (inv.damageHand(1)) this.sound('break_tool');
         // Tilling grass can drop seeds from the tall grass above in MC; keep it simple.
@@ -452,7 +454,7 @@ export class Game {
     world.setBlock(x, y, z, blockId, { meta });
     this.player.inventory.consumeHand(1);
     this.hand.startSwing();
-    this.stepSound(x + 0.5, y + 0.5, z + 0.5, 0.9, blockId);
+    this.blockSound('place', x + 0.5, y + 0.5, z + 0.5, blockId);
   }
 
   interactBlock(hit, kind) {
@@ -513,7 +515,7 @@ export class Game {
         inv.consumeHand(1);
         if (inv.add(filled) > 0) this.dropFromPlayer(filled);
       }
-      this.sound('bucket');
+      this.sound('bucket.fill', hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, 1, hit.id === B.LAVA ? 0.7 : 1);
       this.hand.startSwing();
       return;
     }
@@ -532,7 +534,7 @@ export class Game {
     if (cur !== 0 && !IS_FLUID[cur]) this.spawnBlockDrops(x, y, z, cur, 0, null);
     world.setBlock(x, y, z, item.bucket === 'water' ? B.WATER : B.LAVA);
     inv.slots[inv.selected] = { id: I.BUCKET, count: 1, damage: 0 };
-    this.sound('bucket');
+    this.sound('bucket.empty', x + 0.5, y + 0.5, z + 0.5, 1, item.bucket === 'lava' ? 0.7 : 1);
     this.hand.startSwing();
   }
 
@@ -545,7 +547,7 @@ export class Game {
     }
     this.useTime += dt;
     if (Math.floor(this.useTime / 0.22) !== Math.floor((this.useTime - dt) / 0.22)) {
-      this.sound('eat', this.player.pos.x, this.player.pos.y + 1.5, this.player.pos.z);
+      this.sound('eat');
     }
     if (this.useTime >= 1.6) {
       const item = getItem(s.id);
@@ -623,16 +625,68 @@ export class Game {
     for (const m of this.mobs.mobs) if (!m.dead) affect(m, false);
   }
 
-  sound(name, x, y, z, vol = 1) {
-    this.audio.play(name, x, y, z, vol);
+  sound(name, x, y, z, vol = 1, pitch = 1) {
+    this.audio.play(name, x, y, z, vol, pitch);
   }
 
-  // Footstep / dig sound for the block under or at a position.
-  stepSound(x, y, z, vol = 0.5, id = null) {
+  // Block material sound for an action: 'step' (footsteps), 'hit' (mining), 'break' or 'place'.
+  blockSound(action, x, y, z, id = null) {
     const bid = id ?? this.world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
     if (!bid || bid <= 0) return;
-    const s = BLOCKS[bid].sound;
-    if (s) this.audio.play(s, x, y, z, vol);
+    const name = blockSound(BLOCKS[bid].sound, action);
+    if (!name) return;
+    const [vol, pitch] = { step: [0.55, 1], hit: [0.4, 0.75], break: [1, 0.85], place: [0.9, 0.8] }[action];
+    this.audio.play(name, x, y, z, vol, pitch);
+  }
+
+  // Footstep sound of the block under a position.
+  stepSound(x, y, z, vol = 1) {
+    const bid = this.world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
+    if (bid <= 0) return;
+    const name = blockSound(BLOCKS[bid].sound, 'step');
+    if (name) this.audio.play(name, x, y, z, 0.55 * vol);
+  }
+
+  // Describes the player's surroundings to the audio engine (ambience, reverb, muffling).
+  updateAudio(dt) {
+    const cam = this.renderer.camera;
+    const fwd = cam.getWorldDirection(new THREE.Vector3());
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+    this.audio.setListener(cam.position, fwd, up);
+    const p = this.player.pos;
+    const w = this.world;
+    this.envTimer = (this.envTimer || 0) - dt;
+    if (this.envTimer <= 0 || !this.env) {
+      this.envTimer = 0.5;
+      const hx = Math.floor(p.x);
+      const hy = Math.floor(p.y + 1.6);
+      const hz = Math.floor(p.z);
+      const sky = w.getSkyLight(hx, hy, hz);
+      const roof = w.topY(hx, hz) > hy + 2;
+      let water = 0;
+      let lava = 0;
+      for (let i = 0; i < 48; i++) {
+        const id = w.getBlock(hx + Math.floor(Math.random() * 17) - 8, hy + Math.floor(Math.random() * 9) - 5, hz + Math.floor(Math.random() * 17) - 8);
+        if (id === B.WATER) water++;
+        else if (id === B.LAVA) lava++;
+      }
+      const biome = w.generator.column(hx, hz).biome;
+      const prev = this.env || { nearWater: 0, nearLava: 0 };
+      this.env = {
+        outdoors: Math.min(1, Math.max(0, (sky - 8) / 7)),
+        cave: roof && sky < 6 ? 1 - sky / 6 : 0,
+        altitude: p.y,
+        nearWater: prev.nearWater * 0.5 + Math.min(1, water / 12) * 0.5,
+        nearLava: prev.nearLava * 0.5 + Math.min(1, lava / 8) * 0.5,
+        birds: biome !== BIOMES.DESERT && biome !== BIOMES.OCEAN && biome !== BIOMES.SNOWY && biome !== BIOMES.BEACH,
+      };
+    }
+    this.audio.setEnvironment({
+      ...this.env,
+      underwater: this.player.eyeFluid === B.WATER,
+      day: (this.daylight - 0.25) / 0.75,
+      paused: this.paused,
+    });
   }
 
   // Moves the player up out of solid blocks (after spawning in a fresh chunk). For a brand new
@@ -752,6 +806,7 @@ export class Game {
 
   dispose() {
     this.running = false;
+    this.audio.setEnvironment(null);
     this.mobs.clear();
     this.drops.clear();
     this.particles.clear();

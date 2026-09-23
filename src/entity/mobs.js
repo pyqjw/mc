@@ -352,14 +352,15 @@ export class Mob {
       this.vel.y = 5.5;
     }
     if (!this.def.hostile) this.panic = 100;
-    this.game.sound(this.def.sound + '_hurt', this.pos.x, this.pos.y + 1, this.pos.z);
     if (this.health <= 0) this.die();
+    else this.game.sound(this.def.sound + '_hurt', this.pos.x, this.pos.y + 1, this.pos.z);
     return true;
   }
 
   die() {
     this.deathTime = 0;
     this.health = 0;
+    this.game.sound(this.def.sound + '_death', this.pos.x, this.pos.y + 1, this.pos.z);
     const r = Math.random;
     for (const [id, min, max] of this.def.drops) {
       const n = min + Math.floor(r() * (max - min + 1));
