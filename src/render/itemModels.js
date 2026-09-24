@@ -1,7 +1,7 @@
 // 3D models for items: cubes for blocks, flat sprites for everything else. Used for the held item and drops.
 import * as THREE from 'three';
 import { BLOCKS, RENDER, TEX_TOP, TEX_BOTTOM, TEX_SIDE, TEX_FRONT, ATLAS_TILES_PER_ROW } from '../world/blocks.js';
-import { getAtlasCanvas, getItemCanvas, tileRect } from './textures.js';
+import { getItemAtlasCanvas, getItemCanvas, tileRect } from './textures.js';
 
 let atlasTexture = null;
 const geoCache = new Map();
@@ -9,7 +9,7 @@ const spriteTexCache = new Map();
 
 function atlasTex() {
   if (!atlasTexture) {
-    atlasTexture = new THREE.CanvasTexture(getAtlasCanvas());
+    atlasTexture = new THREE.CanvasTexture(getItemAtlasCanvas());
     atlasTexture.magFilter = THREE.NearestFilter;
     atlasTexture.minFilter = THREE.NearestFilter;
     atlasTexture.generateMipmaps = false;
@@ -67,7 +67,7 @@ export function spriteTexture(id) {
   if (spriteTexCache.has(id)) return spriteTexCache.get(id);
   let canvas;
   if (id < 256) {
-    const src = getAtlasCanvas();
+    const src = getItemAtlasCanvas();
     const r = tileRect(TEX_SIDE[id]);
     canvas = document.createElement('canvas');
     canvas.width = canvas.height = 16;
@@ -83,12 +83,61 @@ export function spriteTexture(id) {
   return t;
 }
 
-// Returns a fresh mesh (with its own material so brightness can be tinted per instance).
+// A sprite turned into a 3D item model one pixel thick, like Minecraft's item models: a front and a
+// back quad plus a side quad for every pixel edge that borders transparency. Centred, 1 unit wide.
+const extrudedCache = new Map();
+export function extrudedGeometry(id) {
+  if (extrudedCache.has(id)) return extrudedCache.get(id);
+  const canvas = spriteTexture(id).image;
+  const data = canvas.getContext('2d').getImageData(0, 0, 16, 16).data;
+  const solid = (x, y) => x >= 0 && y >= 0 && x < 16 && y < 16 && data[(y * 16 + x) * 4 + 3] > 127;
+  const pos = [];
+  const uv = [];
+  const col = [];
+  const idx = [];
+  const h = 1 / 32;
+  const quad = (corners, uvs, shade) => {
+    const base = pos.length / 3;
+    for (let i = 0; i < 4; i++) {
+      pos.push(...corners[i]);
+      uv.push(...uvs[i]);
+      col.push(shade, shade, shade);
+    }
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  quad([[-0.5, -0.5, h], [0.5, -0.5, h], [0.5, 0.5, h], [-0.5, 0.5, h]], [[0, 0], [1, 0], [1, 1], [0, 1]], 1);
+  quad([[0.5, -0.5, -h], [-0.5, -0.5, -h], [-0.5, 0.5, -h], [0.5, 0.5, -h]], [[1, 0], [0, 0], [0, 1], [1, 1]], 0.8);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      if (!solid(x, y)) continue;
+      const x0 = x / 16 - 0.5;
+      const x1 = (x + 1) / 16 - 0.5;
+      const y1 = 0.5 - y / 16;
+      const y0 = 0.5 - (y + 1) / 16;
+      const c = [(x + 0.5) / 16, 1 - (y + 0.5) / 16];
+      const u4 = [c, c, c, c];
+      if (!solid(x + 1, y)) quad([[x1, y0, h], [x1, y0, -h], [x1, y1, -h], [x1, y1, h]], u4, 0.7);
+      if (!solid(x - 1, y)) quad([[x0, y0, -h], [x0, y0, h], [x0, y1, h], [x0, y1, -h]], u4, 0.7);
+      if (!solid(x, y - 1)) quad([[x0, y1, h], [x1, y1, h], [x1, y1, -h], [x0, y1, -h]], u4, 0.9);
+      if (!solid(x, y + 1)) quad([[x0, y0, -h], [x1, y0, -h], [x1, y0, h], [x0, y0, h]], u4, 0.55);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  extrudedCache.set(id, g);
+  return g;
+}
+
+// Returns a fresh mesh (with its own material so brightness can be tinted per instance). Geometries
+// are shared and must not be disposed by the caller.
 export function makeItemMesh(id) {
   if (isCubeItem(id)) {
     const mat = new THREE.MeshBasicMaterial({ map: atlasTex(), vertexColors: true, alphaTest: 0.5 });
     return new THREE.Mesh(blockGeometry(id), mat);
   }
-  const mat = new THREE.MeshBasicMaterial({ map: spriteTexture(id), alphaTest: 0.5, side: THREE.DoubleSide });
-  return new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+  const mat = new THREE.MeshBasicMaterial({ map: spriteTexture(id), vertexColors: true, alphaTest: 0.5 });
+  return new THREE.Mesh(extrudedGeometry(id), mat);
 }

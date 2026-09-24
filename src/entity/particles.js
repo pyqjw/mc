@@ -16,7 +16,7 @@ export class Particles {
   // Block fragment materials, shared per light level.
   breakMaterial(light) {
     if (!this.breakMats[light]) {
-      const mat = new THREE.MeshBasicMaterial({ map: this.game.renderer.atlas, alphaTest: 0.5, side: THREE.DoubleSide });
+      const mat = new THREE.MeshBasicMaterial({ map: this.game.renderer.itemAtlas, alphaTest: 0.5, side: THREE.DoubleSide });
       const b = Math.max(0.15, light / 15);
       mat.color.setScalar(b * b * 0.5 + b * 0.5);
       this.breakMats[light] = mat;

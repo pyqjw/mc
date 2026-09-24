@@ -1,6 +1,6 @@
 // Inventory icons: isometric renders for blocks, flat sprites for items. Cached as data URLs.
 import { BLOCKS, RENDER, TEX_TOP, TEX_SIDE, TEX_FRONT } from '../world/blocks.js';
-import { getAtlasCanvas, getItemCanvas, tileRect } from '../render/textures.js';
+import { getItemAtlasCanvas, getItemCanvas, tileRect } from '../render/textures.js';
 
 const cache = new Map();
 
@@ -19,7 +19,7 @@ function drawFace(ctx, atlas, tile, matrix, darken, clipH = 16) {
 
 function isoIcon(id) {
   const b = BLOCKS[id];
-  const atlas = getAtlasCanvas();
+  const atlas = getItemAtlasCanvas();
   const S = 64;
   const c = document.createElement('canvas');
   c.width = c.height = S;
@@ -60,7 +60,7 @@ export function iconURL(id) {
       const r = tileRect(TEX_SIDE[id]);
       const c = document.createElement('canvas');
       c.width = c.height = 16;
-      c.getContext('2d').drawImage(getAtlasCanvas(), r.x, r.y, 16, 16, 0, 0, 16, 16);
+      c.getContext('2d').drawImage(getItemAtlasCanvas(), r.x, r.y, 16, 16, 0, 0, 16, 16);
       url = c.toDataURL();
     }
   } else {

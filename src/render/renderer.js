@@ -1,6 +1,6 @@
 // Three.js setup: chunk materials, sky (gradient dome, sun, moon, stars, clouds), block highlight and cracks.
 import * as THREE from 'three';
-import { getAtlasCanvas, makeCrackCanvases } from './textures.js';
+import { getAtlasCanvas, getItemAtlasCanvas, makeCrackCanvases, updateAnimatedTiles } from './textures.js';
 import { mulberry32 } from '../world/noise.js';
 import { CHUNK_VERT, CHUNK_FRAG } from './chunkShader.js';
 import { Shadows } from './shadows.js';
@@ -69,6 +69,7 @@ export class Renderer {
     this.camera.rotation.order = 'YXZ';
 
     this.atlas = canvasTexture(getAtlasCanvas());
+    this.itemAtlas = canvasTexture(getItemAtlasCanvas());
     this.uniforms = {
       map: { value: this.atlas },
       daylight: { value: 1 },
@@ -365,7 +366,9 @@ export class Renderer {
 
   render(extraScene, extraCamera) {
     const r = this.renderer;
-    this.uniforms.time.value = performance.now() / 1000;
+    const now = performance.now() / 1000;
+    this.uniforms.time.value = now;
+    if (updateAnimatedTiles(now)) this.atlas.needsUpdate = true;
     if (this.quality !== 'off' && this.post) {
       const u = this.uniforms;
       const lit = u.lightColor.value.r + u.lightColor.value.g > 0.02;

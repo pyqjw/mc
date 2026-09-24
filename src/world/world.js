@@ -832,6 +832,7 @@ export class World {
       geo.setAttribute('position', new THREE.BufferAttribute(g.positions, 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(g.uvs, 2));
       geo.setAttribute('aLight', new THREE.BufferAttribute(g.light, 4, true));
+      geo.setAttribute('aTint', new THREE.BufferAttribute(g.tint, 4, true));
       geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
       geo.computeBoundingSphere();
       const mesh = new THREE.Mesh(geo, mat);

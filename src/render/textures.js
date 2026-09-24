@@ -1,7 +1,8 @@
 // Procedural 16x16 pixel-art textures: the block atlas, item sprites and crack overlays.
-import { TILES, ATLAS_TILES_PER_ROW } from '../world/blocks.js';
+import { TILES, TILE_INDEX, ATLAS_TILES_PER_ROW, BLOCKS } from '../world/blocks.js';
 import { mulberry32 } from '../world/noise.js';
 import { ITEMS, TOOL_MATERIALS } from '../items.js';
+import { ITEM_GRASS, ITEM_FOLIAGE, ITEM_WATER } from '../world/biomeColors.js';
 
 const T = 16;
 
@@ -81,6 +82,13 @@ function mix(a, b, t) {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, 255];
 }
 
+// Alpha value that marks a texel as tintable: the chunk shader multiplies it by the biome colour.
+const TINTED = 254;
+
+function gray(v, a = TINTED) {
+  return [v, v, v, a];
+}
+
 // ---------- reusable painters ----------
 const C = {
   stone: [125, 125, 125],
@@ -143,6 +151,17 @@ function leaves(p, base) {
     if (r < 0.4) return mul(base, 0.72);
     if (r > 0.9) return mul(base, 1.2);
     return shade(base, (p.rand() - 0.5) * 20);
+  });
+}
+
+// Greyscale leaves that take the biome foliage colour.
+function tintedLeaves(p) {
+  p.fill(() => {
+    const r = p.rand();
+    if (r < 0.2) return [0, 0, 0, 0];
+    if (r < 0.38) return gray(112 + p.rand() * 12);
+    if (r > 0.9) return gray(212);
+    return gray(160 + (p.rand() - 0.5) * 26);
   });
 }
 
@@ -217,20 +236,99 @@ function wheat(p, stage) {
   }
 }
 
+
+// ---------- animated liquids ----------
+// Tileable smooth noise on a 16x16 torus, sampled with a drifting offset so frames loop seamlessly.
+function tileNoise(seed, blurPasses = 2) {
+  const rand = mulberry32(seed);
+  let g = new Float32Array(T * T);
+  for (let i = 0; i < g.length; i++) g[i] = rand();
+  for (let pass = 0; pass < blurPasses; pass++) {
+    const n = new Float32Array(T * T);
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += g[((x + dx + T) % T) + ((y + dy + T) % T) * T];
+        n[x + y * T] = sum / 9;
+      }
+    }
+    g = n;
+  }
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const v of g) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  for (let i = 0; i < g.length; i++) g[i] = (g[i] - lo) / (hi - lo);
+  return g;
+}
+
+function sampleWrap(g, x, y) {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const at = (xx, yy) => g[(((xx % T) + T) % T) + (((yy % T) + T) % T) * T];
+  const a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
+  const b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
+  return a + (b - a) * fy;
+}
+
+const WATER_FRAMES = 32;
+const WATER_FPS = 10;
+const LAVA_FRAMES = 40;
+const LAVA_FPS = 5;
+let liquidNoise = null;
+function noiseFields() {
+  if (!liquidNoise) liquidNoise = [tileNoise(11), tileNoise(23), tileNoise(37, 1), tileNoise(41, 1)];
+  return liquidNoise;
+}
+
+// Greyscale ripples (tinted blue by the biome water colour), translucent.
+function waterFrame(p, f) {
+  const [a, b] = noiseFields();
+  const t = f / WATER_FRAMES;
+  p.fill((x, y) => {
+    const v = sampleWrap(a, x + 16 * t, y) * 0.6 + sampleWrap(b, x - 8 * t, y + 16 * t) * 0.4;
+    const q = Math.floor(Math.pow(v, 1.4) * 7) / 6;
+    const g = 150 + q * 95;
+    return [g, g, g, 180];
+  });
+}
+
+const LAVA_PALETTE = [[140, 26, 4], [178, 40, 6], [210, 66, 8], [232, 100, 14], [246, 140, 26], [252, 180, 46], [255, 218, 96]];
+
+function lavaFrame(p, f) {
+  const [, , a, b] = noiseFields();
+  const t = f / LAVA_FRAMES;
+  p.fill((x, y) => {
+    const v = sampleWrap(a, x + 16 * t, y + 16 * t) * 0.55 + sampleWrap(b, x - 16 * t, y) * 0.45;
+    const i = Math.max(0, Math.min(LAVA_PALETTE.length - 1, Math.floor(v * LAVA_PALETTE.length)));
+    return LAVA_PALETTE[i];
+  });
+}
+
+const ANIMATED = [
+  { tile: 'water', paint: waterFrame, frames: WATER_FRAMES, fps: WATER_FPS },
+  { tile: 'lava', paint: lavaFrame, frames: LAVA_FRAMES, fps: LAVA_FPS },
+];
+
 // ---------- tile table ----------
 const PAINTERS = {
   stone: (p) => stone(p),
   dirt: (p) => dirt(p),
   grass_top: (p) => p.fill(() => {
     const r = p.rand();
-    if (r < 0.15) return mul(C.grass, 0.8);
-    if (r > 0.9) return mul(C.grass, 1.12);
-    return shade(C.grass, (p.rand() - 0.5) * 14);
+    if (r < 0.14) return gray(146 + p.rand() * 8);
+    if (r > 0.9) return gray(204 + p.rand() * 10);
+    return gray(172 + (p.rand() - 0.5) * 18);
   }),
   grass_side: (p) => {
     dirt(p);
-    const depth = Array.from({ length: T }, () => 3 + Math.floor(p.rand() * 2.4));
-    p.fill((x, y) => (y < depth[x] ? shade(C.grass, (p.rand() - 0.5) * 16) : null));
+    const depth = Array.from({ length: T }, () => (p.rand() < 0.2 ? 5 : 3) + Math.floor(p.rand() * 2));
+    p.fill((x, y) => {
+      if (y >= depth[x]) return null;
+      const r = p.rand();
+      return gray(r < 0.15 ? 150 : r > 0.88 ? 205 : 172 + (p.rand() - 0.5) * 18);
+    });
   },
   cobblestone: (p) => cobble(p),
   oak_planks: (p) => planks(p, C.oakPlanks),
@@ -259,9 +357,9 @@ const PAINTERS = {
   birch_log_top: (p) => logTop(p, [205, 188, 130], [216, 214, 206]),
   spruce_log: (p) => logSide(p, [60, 40, 20], 0.75),
   spruce_log_top: (p) => logTop(p, [120, 90, 55], [60, 40, 20]),
-  oak_leaves: (p) => leaves(p, [60, 128, 38]),
-  birch_leaves: (p) => leaves(p, [110, 155, 70]),
-  spruce_leaves: (p) => leaves(p, [52, 92, 58]),
+  oak_leaves: (p) => tintedLeaves(p),
+  birch_leaves: (p) => leaves(p, [88, 116, 58]),
+  spruce_leaves: (p) => leaves(p, [56, 90, 56]),
   glass: (p) => p.fill((x, y) => {
     if (x === 0 || y === 0 || x === 15 || y === 15) return [215, 235, 240, 255];
     if ((x === y + 3 && x < 9) || (x === y + 4 && x < 8) || (x === y - 6 && x > 8)) return [255, 255, 255, 170];
@@ -271,14 +369,8 @@ const PAINTERS = {
   iron_ore: (p) => ore(p, [216, 175, 147]),
   gold_ore: (p) => ore(p, [250, 235, 80]),
   diamond_ore: (p) => ore(p, [95, 235, 240]),
-  water: (p) => p.fill((x, y) => {
-    const w = Math.sin((x + y * 0.5) * 0.8) * 8 + (p.rand() - 0.5) * 10;
-    return [45 + w, 95 + w, 215 + w, 175];
-  }),
-  lava: (p) => p.fill((x, y) => {
-    const t = (Math.sin(x * 0.9 + p.rand()) + Math.cos(y * 0.7)) * 0.25 + 0.5 + (p.rand() - 0.5) * 0.3;
-    return mix([200, 60, 10], [255, 200, 50], Math.max(0, Math.min(1, t)));
-  }),
+  water: (p) => waterFrame(p, 0),
+  lava: (p) => lavaFrame(p, 0),
   crafting_table_top: (p) => {
     planks(p, C.oakPlanks);
     p.fill((x, y) => {
@@ -359,7 +451,7 @@ const PAINTERS = {
       const lean = p.rand() < 0.5 ? -1 : 1;
       for (let k = 0; k < h; k++) {
         const x = x0 + (k > h * 0.6 ? lean : 0);
-        p.px(x, 15 - k, mul([90, 160, 55], 0.75 + p.rand() * 0.4));
+        p.px(x, 15 - k, gray(135 + p.rand() * 55));
       }
     }
   },
@@ -466,6 +558,7 @@ const PAINTERS = {
 };
 
 let atlasCanvas = null;
+let itemAtlasCanvas = null;
 
 function makeCanvas(w, h) {
   if (typeof document !== 'undefined') {
@@ -477,6 +570,18 @@ function makeCanvas(w, h) {
   return new OffscreenCanvas(w, h);
 }
 
+// Tiles that carry a biome tint, with the fixed colour used for items and icons.
+function itemTints() {
+  const out = new Map();
+  const colours = { grass: ITEM_GRASS, foliage: ITEM_FOLIAGE, water: ITEM_WATER };
+  for (const b of BLOCKS) {
+    if (!b || !b.tint) continue;
+    for (const t of Object.values(b.textures)) out.set(t, colours[b.tint]);
+  }
+  return out;
+}
+
+// The world atlas: tintable texels are greyscale with alpha 254 (see chunkShader.js).
 export function getAtlasCanvas() {
   if (atlasCanvas) return atlasCanvas;
   const size = ATLAS_TILES_PER_ROW * T;
@@ -491,7 +596,65 @@ export function getAtlasCanvas() {
   });
   ctx.putImageData(img, 0, 0);
   atlasCanvas = canvas;
+
+  // Item atlas: the same tiles with the default biome colours baked in.
+  const items = new Uint8ClampedArray(img.data);
+  for (const [name, col] of itemTints()) {
+    const tile = TILE_INDEX[name];
+    const ox = (tile % ATLAS_TILES_PER_ROW) * T;
+    const oy = Math.floor(tile / ATLAS_TILES_PER_ROW) * T;
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const i = ((oy + y) * size + ox + x) * 4;
+        const a = items[i + 3];
+        if (a === 0 || a === 255) continue;
+        items[i] = (items[i] * col[0]) / 255;
+        items[i + 1] = (items[i + 1] * col[1]) / 255;
+        items[i + 2] = (items[i + 2] * col[2]) / 255;
+        items[i + 3] = 255;
+      }
+    }
+  }
+  itemAtlasCanvas = makeCanvas(size, size);
+  const ictx = itemAtlasCanvas.getContext('2d');
+  const iimg = ictx.createImageData(size, size);
+  iimg.data.set(items);
+  ictx.putImageData(iimg, 0, 0);
   return canvas;
+}
+
+// Atlas for items, icons, particles and held blocks (tints applied with default colours).
+export function getItemAtlasCanvas() {
+  getAtlasCanvas();
+  return itemAtlasCanvas;
+}
+
+// Animated tiles (water, lava). Call every frame; returns true when the atlas changed.
+let animFrames = null;
+export function updateAnimatedTiles(seconds) {
+  const canvas = getAtlasCanvas();
+  const ctx = canvas.getContext('2d');
+  if (!animFrames) {
+    animFrames = ANIMATED.map((a) => {
+      const frames = [];
+      for (let f = 0; f < a.frames; f++) {
+        const img = ctx.createImageData(T, T);
+        a.paint(new Painter(img.data, T, 0, 0, mulberry32(f)), f);
+        frames.push(img);
+      }
+      const tile = TILE_INDEX[a.tile];
+      return { ...a, images: frames, x: (tile % ATLAS_TILES_PER_ROW) * T, y: Math.floor(tile / ATLAS_TILES_PER_ROW) * T, current: 0 };
+    });
+  }
+  let changed = false;
+  for (const a of animFrames) {
+    const f = Math.floor(seconds * a.fps) % a.frames;
+    if (f === a.current) continue;
+    a.current = f;
+    ctx.putImageData(a.images[f], a.x, a.y);
+    changed = true;
+  }
+  return changed;
 }
 
 export function tileRect(tile) {

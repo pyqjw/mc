@@ -6,7 +6,7 @@ import { CHUNK_SIZE, WORLD_HEIGHT, CHUNK_VOLUME, blockIndex } from '../constants
 import {
   IS_OPAQUE, LIGHT_ATTEN, LIGHT_EMIT, RENDER_TYPE, RENDER_LAYER, CULL_SELF, IS_FLUID,
   TEX_TOP, TEX_BOTTOM, TEX_SIDE, TEX_FRONT, IS_ORIENTABLE, RENDER, LAYER, ATLAS_TILES_PER_ROW, TILE_INDEX, B,
-  fluidHeight, BLOCKS,
+  fluidHeight, BLOCKS, TINT_TYPE, TINT,
 } from './blocks.js';
 
 const H = WORLD_HEIGHT;
@@ -152,9 +152,20 @@ class GeometryBuilder {
     this.pos = new Float32Array(this.cap * 3);
     this.uv = new Float32Array(this.cap * 2);
     this.light = new Uint8Array(this.cap * 4);
+    this.tint = new Uint8Array(this.cap * 4);
     this.idx = new Uint32Array(this.cap * 1.5);
     this.vc = 0;
     this.ic = 0;
+    this.tr = 255;
+    this.tg = 255;
+    this.tb = 255;
+  }
+
+  // Biome tint for the following vertices (multiplies texels whose alpha is below 255).
+  setTint(r, g, b) {
+    this.tr = r;
+    this.tg = g;
+    this.tb = b;
   }
 
   reset() {
@@ -174,6 +185,7 @@ class GeometryBuilder {
     this.pos = grow(this.pos, 3, Float32Array);
     this.uv = grow(this.uv, 2, Float32Array);
     this.light = grow(this.light, 4, Uint8Array);
+    this.tint = grow(this.tint, 4, Uint8Array);
     this.idx = grow(this.idx, 1.5, Uint32Array);
     this.cap = cap;
   }
@@ -189,6 +201,10 @@ class GeometryBuilder {
     this.light[n * 4 + 1] = b;
     this.light[n * 4 + 2] = shade;
     this.light[n * 4 + 3] = flag;
+    this.tint[n * 4] = this.tr;
+    this.tint[n * 4 + 1] = this.tg;
+    this.tint[n * 4 + 2] = this.tb;
+    this.tint[n * 4 + 3] = 255;
   }
 
   quad(flip) {
@@ -210,6 +226,7 @@ class GeometryBuilder {
       positions: this.pos.slice(0, this.vc * 3),
       uvs: this.uv.slice(0, this.vc * 2),
       light: this.light.slice(0, this.vc * 4),
+      tint: this.tint.slice(0, this.vc * 4),
       indices: this.idx.slice(0, this.ic),
     };
   }
@@ -414,11 +431,34 @@ function emitTorch(g, id, x, y, z, lx, lz) {
   }
 }
 
+// Default tints when no biome colours are supplied (tests, tools).
+const DEFAULT_TINTS = (() => {
+  const mk = (r, g, b) => {
+    const a = new Uint8Array(768);
+    for (let i = 0; i < 256; i++) { a[i * 3] = r; a[i * 3 + 1] = g; a[i * 3 + 2] = b; }
+    return a;
+  };
+  return { grass: mk(145, 189, 89), foliage: mk(119, 171, 47), water: mk(63, 118, 228) };
+})();
+
+function applyTint(g, id, lx, lz, tints) {
+  const t = TINT_TYPE[id];
+  if (t === TINT.NONE) {
+    g.setTint(255, 255, 255);
+    return;
+  }
+  const arr = t === TINT.GRASS ? tints.grass : t === TINT.FOLIAGE ? tints.foliage : tints.water;
+  const o = (lx + lz * 16) * 3;
+  g.setTint(arr[o], arr[o + 1], arr[o + 2]);
+}
+
 // chunks: array of 9 {blocks, meta} (or null), index = (dz + 1) * 3 + (dx + 1).
-export function buildChunkMesh(chunks) {
+// tints: optional biome colours of the centre chunk ({ grass, foliage, water }, see biomeColors.js).
+export function buildChunkMesh(chunks, tints = null) {
   copyRegion(chunks);
   computeLight();
   for (const g of builders) g.reset();
+  const tt = tints || DEFAULT_TINTS;
 
   for (let y = 0; y < H; y++) {
     for (let z = PAD; z < PAD + 16; z++) {
@@ -430,6 +470,7 @@ export function buildChunkMesh(chunks) {
         const g = builders[RENDER_LAYER[id]];
         const lx = x - PAD;
         const lz = z - PAD;
+        applyTint(g, id, lx, lz, tt);
         switch (rt) {
           case RENDER.CUBE: emitCube(g, id, rMeta[i], x, y, z, lx, lz, 1); break;
           case RENDER.BED: emitCube(g, id, rMeta[i], x, y, z, lx, lz, BLOCK_HEIGHT[id]); break;

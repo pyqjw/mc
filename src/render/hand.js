@@ -1,7 +1,14 @@
 // First-person arm / held item, rendered in its own scene on top of the world.
+// Like Minecraft 1.9+, the bare arm shows when the hand is empty; held items float on their own.
 import * as THREE from 'three';
 import { makeItemMesh, isCubeItem } from './itemModels.js';
 import { getItem } from '../items.js';
+import { skinBox, getSkinTexture } from './skin.js';
+
+// Pose of the empty arm: shoulder position and the direction the arm points in.
+const ARM_SHOULDER = new THREE.Vector3(0.84, -0.78, -0.5);
+const ARM_DIR = new THREE.Vector3(-0.4, 0.56, -0.72).normalize();
+const ARM_TWIST = 2.4;
 
 export class Hand {
   constructor() {
@@ -13,11 +20,19 @@ export class Hand {
     this.mesh = null;
     this.swing = 0; // 0..1 progress of the current swing, <0 idle
     this.equip = 1;
-    this.armMat = new THREE.MeshBasicMaterial({ color: 0xd8a070 });
-    const armGeo = new THREE.BoxGeometry(0.16, 0.16, 0.7);
-    armGeo.translate(0, 0, -0.2);
-    this.arm = new THREE.Mesh(armGeo, this.armMat);
     this.time = 0;
+
+    // Right arm from the player skin, pivoting at the shoulder (the top of the box).
+    this.armMat = new THREE.MeshBasicMaterial({ map: getSkinTexture(), vertexColors: true });
+    const geo = skinBox('rightArm', 1 / 16);
+    geo.translate(0, -0.375, 0);
+    const armMesh = new THREE.Mesh(geo, this.armMat);
+    armMesh.scale.set(1.25, 1.25, 1.25);
+    this.arm = new THREE.Group();
+    this.arm.add(armMesh);
+    this.arm.position.copy(ARM_SHOULDER);
+    this.arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), ARM_DIR);
+    this.arm.rotateY(ARM_TWIST);
   }
 
   resize(w, h) {
@@ -35,28 +50,23 @@ export class Hand {
     this.equip = 0;
     if (this.mesh) {
       this.root.remove(this.mesh);
-      if (this.mesh !== this.arm) {
-        this.mesh.material.dispose();
-        if (!isCubeItem(this.heldIdPrev)) this.mesh.geometry.dispose();
-      }
+      if (this.mesh !== this.arm) this.mesh.material.dispose(); // geometries are shared
     }
-    this.heldIdPrev = id;
     if (id <= 0) {
       this.mesh = this.arm;
-      this.arm.position.set(0.5, -0.5, -0.55);
-      this.arm.rotation.set(0.45, 0.25, 0.35);
     } else if (isCubeItem(id)) {
       this.mesh = makeItemMesh(id);
-      this.mesh.scale.setScalar(0.38);
-      this.mesh.position.set(0.52, -0.42, -0.75);
+      this.mesh.scale.setScalar(0.36);
+      this.mesh.position.set(0.54, -0.4, -0.8);
       this.mesh.rotation.set(0.1, Math.PI / 4, 0);
     } else {
       this.mesh = makeItemMesh(id);
       const it = getItem(id);
-      const tool = it && it.tool;
-      this.mesh.scale.setScalar(tool ? 0.62 : 0.5);
-      this.mesh.position.set(0.52, -0.33, -0.72);
-      this.mesh.rotation.set(0, -Math.PI / 2 + 0.35, tool ? 0.35 : 0.1);
+      const tool = !!(it && it.tool);
+      this.mesh.scale.setScalar(tool ? 0.68 : 0.52);
+      this.mesh.position.set(0.56, tool ? -0.3 : -0.36, -0.78);
+      // Seen from behind (mirrored) so the head of a tool points up and to the left.
+      this.mesh.rotation.set(-0.15, Math.PI + 0.1, tool ? 0.12 : 0, 'YXZ');
     }
     this.root.add(this.mesh);
   }
@@ -73,19 +83,20 @@ export class Hand {
     const sw = Math.sin(s * Math.PI);
     const sw2 = Math.sin(Math.sqrt(s) * Math.PI);
     const r = this.root;
+    const empty = this.mesh === this.arm;
     r.position.set(
-      -sw2 * 0.25 + Math.sin(bobPhase) * 0.035 * bobAmount,
-      sw2 * 0.12 - (1 - this.equip) * 0.6 - Math.abs(Math.cos(bobPhase)) * 0.04 * bobAmount,
+      -sw2 * (empty ? 0.32 : 0.25) + Math.sin(bobPhase) * 0.035 * bobAmount,
+      sw2 * (empty ? 0.16 : 0.12) - (1 - this.equip) * 0.6 - Math.abs(Math.cos(bobPhase)) * 0.04 * bobAmount,
       -sw * 0.15,
     );
-    r.rotation.set(-sw * 0.6, sw2 * 0.4, -sw * 0.25);
+    r.rotation.set(-sw * (empty ? 0.35 : 0.6), sw2 * 0.4, -sw * 0.25);
     if (eating) {
       r.position.x -= 0.2;
       r.position.y += 0.12 + Math.sin(this.time * 25) * 0.025;
       r.rotation.x += 0.4;
     }
     const b = Math.max(0.1, light);
-    if (this.mesh === this.arm) this.armMat.color.setRGB(0.85 * b, 0.63 * b, 0.44 * b);
+    if (empty) this.armMat.color.setScalar(b);
     else if (this.mesh) this.mesh.material.color.setScalar(b);
   }
 }

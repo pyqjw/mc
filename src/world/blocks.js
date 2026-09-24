@@ -61,6 +61,7 @@ function def(id, key, name, props = {}) {
     orientable: false,
     drops: null, // function(rand, toolItem) => [[id, count], ...] or null for self
     height: 1,
+    tint: null, // 'grass' | 'foliage' | 'water': biome colour applied to texels with alpha < 255
     ...props,
   };
   b.textures = textures;
@@ -74,7 +75,7 @@ const leaves = { layer: LAYER.CUTOUT, opaque: false, lightAtten: 1, hardness: 0.
 
 def(0, 'air', '空气', { render: RENDER.NONE, solid: false, opaque: false, hardness: 0, replaceable: true });
 def(1, 'stone', '石头', { hardness: 1.5, tool: 'pickaxe', harvestLevel: 0, drops: () => [[4, 1]] });
-def(2, 'grass', '草方块', { tex: { top: 'grass_top', bottom: 'dirt', side: 'grass_side' }, hardness: 0.6, tool: 'shovel', sound: 'grass', drops: () => [[3, 1]] });
+def(2, 'grass', '草方块', { tex: { top: 'grass_top', bottom: 'dirt', side: 'grass_side' }, hardness: 0.6, tool: 'shovel', sound: 'grass', tint: 'grass', drops: () => [[3, 1]] });
 def(3, 'dirt', '泥土', { hardness: 0.5, tool: 'shovel', sound: 'gravel' });
 def(4, 'cobblestone', '圆石', { hardness: 2, tool: 'pickaxe', harvestLevel: 0 });
 def(5, 'oak_planks', '橡木木板', { hardness: 2, tool: 'axe', sound: 'wood' });
@@ -87,6 +88,7 @@ def(8, 'gravel', '沙砾', {
 def(9, 'oak_log', '橡木原木', { tex: { top: 'oak_log_top', side: 'oak_log' }, hardness: 2, tool: 'axe', sound: 'wood' });
 def(10, 'oak_leaves', '橡树树叶', {
   ...leaves,
+  tint: 'foliage',
   drops: (r) => {
     const out = [];
     if (r() < 0.05) out.push([48, 1]);
@@ -101,7 +103,7 @@ def(14, 'gold_ore', '金矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 2
 def(15, 'diamond_ore', '钻石矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 2, drops: () => [[261, 1]] });
 def(16, 'water', '水', {
   render: RENDER.LIQUID, layer: LAYER.TRANSLUCENT, solid: false, opaque: false, lightAtten: 2,
-  hardness: -1, replaceable: true, cullSelf: true, fluid: 'water', sound: null,
+  hardness: -1, replaceable: true, cullSelf: true, fluid: 'water', sound: null, tint: 'water',
 });
 def(17, 'lava', '熔岩', {
   render: RENDER.LIQUID, layer: LAYER.SOLID, solid: false, opaque: false, lightAtten: 14, light: 15,
@@ -143,7 +145,7 @@ def(28, 'spruce_log', '云杉原木', { tex: { top: 'spruce_log_top', side: 'spr
 def(29, 'spruce_leaves', '云杉树叶', { ...leaves, drops: (r) => (r() < 0.05 ? [[50, 1]] : []) });
 def(30, 'birch_planks', '白桦木板', { hardness: 2, tool: 'axe', sound: 'wood' });
 def(31, 'spruce_planks', '云杉木板', { hardness: 2, tool: 'axe', sound: 'wood' });
-def(32, 'tall_grass', '草', { ...cross, replaceable: true, support: 'soil', drops: (r) => (r() < 0.125 ? [[280, 1]] : []) });
+def(32, 'tall_grass', '草', { ...cross, replaceable: true, support: 'soil', tint: 'grass', drops: (r) => (r() < 0.125 ? [[280, 1]] : []) });
 def(33, 'poppy', '虞美人', { ...cross, support: 'soil' });
 def(34, 'dandelion', '蒲公英', { ...cross, support: 'soil' });
 def(35, 'dead_bush', '枯萎的灌木', { ...cross, replaceable: true, support: 'sand', drops: (r) => [[256, Math.floor(r() * 3)]] });
@@ -205,6 +207,8 @@ export const TEX_BOTTOM = new Uint16Array(MAX_BLOCK_ID);
 export const TEX_SIDE = new Uint16Array(MAX_BLOCK_ID);
 export const TEX_FRONT = new Uint16Array(MAX_BLOCK_ID);
 export const IS_ORIENTABLE = new Uint8Array(MAX_BLOCK_ID);
+export const TINT = { NONE: 0, GRASS: 1, FOLIAGE: 2, WATER: 3 };
+export const TINT_TYPE = new Uint8Array(MAX_BLOCK_ID);
 
 for (const b of BLOCKS) {
   if (!b) continue;
@@ -217,6 +221,7 @@ for (const b of BLOCKS) {
   CULL_SELF[b.id] = b.cullSelf ? 1 : 0;
   IS_FLUID[b.id] = b.fluid ? 1 : 0;
   IS_ORIENTABLE[b.id] = b.orientable ? 1 : 0;
+  TINT_TYPE[b.id] = b.tint ? TINT[b.tint.toUpperCase()] : 0;
   for (const [slot, arr] of [['top', TEX_TOP], ['bottom', TEX_BOTTOM], ['side', TEX_SIDE], ['front', TEX_FRONT]]) {
     const t = b.textures[slot];
     if (b.render !== RENDER.NONE && TILE_INDEX[t] === undefined) {

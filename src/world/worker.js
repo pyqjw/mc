@@ -1,6 +1,7 @@
 // Web worker: terrain generation and chunk meshing off the main thread.
 import { TerrainGenerator } from './generator.js';
 import { buildChunkMesh } from './mesher.js';
+import { chunkTints } from './biomeColors.js';
 
 let generator = null;
 
@@ -16,11 +17,12 @@ self.onmessage = (e) => {
     return;
   }
   if (msg.type === 'mesh') {
-    const r = buildChunkMesh(msg.chunks);
+    const tints = generator ? chunkTints(generator, msg.cx, msg.cz) : null;
+    const r = buildChunkMesh(msg.chunks, tints);
     const transfer = [r.skyLight.buffer, r.blockLight.buffer];
     for (const k of ['solid', 'cutout', 'translucent']) {
       const g = r[k];
-      transfer.push(g.positions.buffer, g.uvs.buffer, g.light.buffer, g.indices.buffer);
+      transfer.push(g.positions.buffer, g.uvs.buffer, g.light.buffer, g.tint.buffer, g.indices.buffer);
     }
     self.postMessage({ type: 'meshed', id: msg.id, cx: msg.cx, cz: msg.cz, version: msg.version, ...r }, transfer);
   }

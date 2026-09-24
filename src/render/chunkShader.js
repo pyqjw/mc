@@ -4,12 +4,16 @@
 //
 // aLight = (sky light, block light, face shade * ambient occlusion, flag). Flags (0..255):
 //   128 = leaves, 180 = water, 200 = water surface top vertex, 255 = top of a plant.
+// aTint = biome colour (grass / foliage / water). It multiplies texels whose alpha is below 1, which
+// is how tintable textures (grass, leaves, water) mark their greyscale parts.
 
 export const CHUNK_VERT = /* glsl */ `
   attribute vec4 aLight;
+  attribute vec4 aTint;
   uniform float time;
   varying vec2 vUv;
   varying vec3 vLight;
+  varying vec3 vTint;
   varying float vFlag;
   varying float vDepth;
   varying vec3 vWorldPos;
@@ -17,6 +21,7 @@ export const CHUNK_VERT = /* glsl */ `
   void main() {
     vUv = uv;
     vLight = aLight.xyz;
+    vTint = aTint.rgb;
     vFlag = aLight.w;
     vec4 wp = modelMatrix * vec4(position, 1.0);
   #ifdef WAVING
@@ -54,6 +59,7 @@ export const CHUNK_FRAG = /* glsl */ `
   uniform float gamma;
   varying vec2 vUv;
   varying vec3 vLight;
+  varying vec3 vTint;
   varying float vFlag;
   varying float vDepth;
   varying vec3 vWorldPos;
@@ -110,6 +116,7 @@ export const CHUNK_FRAG = /* glsl */ `
     vec4 tex = texture2D(map, vUv);
     if (tex.a < alphaTest) discard;
     float alpha = tex.a * opacity;
+    vec3 albedo = tex.a < 0.999 ? tex.rgb * vTint : tex.rgb;
     vec3 col;
     vec3 fogC = fogColor;
 #ifdef SHADERS
@@ -135,7 +142,7 @@ export const CHUNK_FRAG = /* glsl */ `
     vec3 torch = vec3(1.0, 0.68, 0.38) * pow(bl, 4.0) * 1.25 + vec3(1.0, 0.8, 0.55) * pow(bl, 2.0) * 0.12;
     vec3 light = ambient * ao + direct * mix(ao, 1.0, 0.6) + torch * ao;
     light = max(light, vec3(0.018) * ao);
-    col = tex.rgb * light;
+    col = albedo * light;
 
     if (water) {
       vec3 Nw = N;
@@ -153,7 +160,7 @@ export const CHUNK_FRAG = /* glsl */ `
       vec3 R = reflect(-V, Nw);
       vec3 refl = skyColor(R) * (0.25 + 0.75 * sunVis);
       float spec = pow(max(dot(R, lightDir), 0.0), 220.0) * sh * sunVis * 6.0;
-      vec3 base = tex.rgb * vec3(0.55, 0.8, 1.0) * (ambient + direct * 0.5 + torch) * 0.9;
+      vec3 base = albedo * (ambient + direct * 0.5 + torch) * 0.9;
       col = mix(base, refl, fres * (N.y > 0.5 ? 1.0 : 0.4)) + lightColor * spec;
       alpha = mix(0.62, 0.96, fres);
     }
@@ -166,7 +173,7 @@ export const CHUNK_FRAG = /* glsl */ `
     float blk = curve(vLight.y);
     vec3 light = max(vec3(skyL), vec3(blk) * vec3(1.0, 0.92, 0.78));
     light = max(light, vec3(0.035));
-    col = tex.rgb * light * vLight.z;
+    col = albedo * light * vLight.z;
 #endif
     float f = smoothstep(fogNear, fogFar, vDepth);
     gl_FragColor = vec4(mix(col, fogC, f), alpha);
