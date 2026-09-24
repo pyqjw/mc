@@ -1,5 +1,7 @@
-// In-game HUD: crosshair, hotbar, health, hunger, air, messages and the F3 debug screen.
-import { iconURL, isIsoIcon, hudSprite } from './icons.js';
+// In-game HUD laid out in GUI pixels like Minecraft: crosshair, hotbar, XP bar and level, health,
+// hunger, armour and air rows, the selected item's name, chat messages and the F3 debug screen.
+import { iconURL as itemIconURL, isIsoIcon } from './icons.js';
+import { hotbarURL, selectorURL, xpBarURL, iconURL } from './gui.js';
 import { getItem, itemName } from '../items.js';
 
 function el(tag, cls, parent) {
@@ -30,16 +32,17 @@ export function renderStack(slotEl, stack) {
     return;
   }
   img.style.display = '';
-  img.src = iconURL(stack.id);
+  img.src = itemIconURL(stack.id);
   img.className = isIsoIcon(stack.id) ? 'iso' : 'flat';
   cnt.textContent = stack.count > 1 ? String(stack.count) : '';
   const it = getItem(stack.id);
-  if (it && it.tool && stack.damage > 0) {
-    const frac = 1 - stack.damage / it.tool.durability;
+  const maxDur = it && (it.tool ? it.tool.durability : it.durability);
+  if (maxDur && stack.damage > 0) {
+    const frac = 1 - stack.damage / maxDur;
     dur.style.display = '';
     const bar = dur.firstChild;
-    bar.style.width = `${Math.max(1, frac * 100)}%`;
-    bar.style.background = `hsl(${Math.round(frac * 120)}, 100%, 45%)`;
+    bar.style.width = `${Math.max(1, Math.round(frac * 13)) * 100 / 13}%`;
+    bar.style.background = `hsl(${Math.round(frac * 120)}, 100%, 50%)`;
   } else {
     dur.style.display = 'none';
   }
@@ -51,38 +54,54 @@ export class HUD {
     const root = document.getElementById('hud');
     this.root = root;
     root.innerHTML = '';
-    el('div', 'crosshair', root);
+    this.crosshair = el('div', 'crosshair', root);
     this.vignette = el('div', 'vignette', root);
     this.waterOverlay = el('div', 'water-overlay', root);
     this.sleepOverlay = el('div', 'sleep-overlay', root);
     const bottom = el('div', 'hud-bottom', root);
     this.itemName = el('div', 'item-name', bottom);
-    const stats = el('div', 'stats', bottom);
-    const left = el('div', 'stats-left', stats);
-    const right = el('div', 'stats-right', stats);
-    this.bubbles = el('div', 'icon-row right', right);
-    this.hearts = el('div', 'icon-row', left);
-    this.food = el('div', 'icon-row right', right);
-    this.heartEls = [];
-    this.foodEls = [];
-    this.bubbleEls = [];
-    for (let i = 0; i < 10; i++) {
-      this.heartEls.push(el('img', '', this.hearts));
-      this.foodEls.push(el('img', '', this.food));
-      this.bubbleEls.push(el('img', '', this.bubbles));
-    }
+
+    const row = (cls) => {
+      const r = el('div', `icon-row ${cls}`, bottom);
+      const icons = [];
+      for (let i = 0; i < 10; i++) icons.push(el('img', '', r));
+      return { row: r, icons };
+    };
+    this.armorRow = row('armor');
+    this.airRow = row('air');
+    this.heartRow = row('hearts');
+    this.foodRow = row('food');
+
+    this.xp = el('div', 'xp-bar', bottom);
+    this.xp.style.backgroundImage = `url(${xpBarURL(false)})`;
+    this.xpFill = el('div', 'xp-fill', this.xp);
+    this.xpFill.style.backgroundImage = `url(${xpBarURL(true)})`;
+    this.xpLevel = el('div', 'xp-level', bottom);
+
     this.hotbar = el('div', 'hotbar', bottom);
+    this.hotbar.style.backgroundImage = `url(${hotbarURL()})`;
     this.slots = [];
-    for (let i = 0; i < 9; i++) this.slots.push(el('div', 'hslot', this.hotbar));
+    for (let i = 0; i < 9; i++) {
+      const s = el('div', 'hslot', this.hotbar);
+      s.style.left = `calc(${3 + i * 20} * var(--u))`;
+      this.slots.push(s);
+    }
     this.selector = el('div', 'selector', this.hotbar);
+    this.selector.style.backgroundImage = `url(${selectorURL()})`;
+
     this.messages = el('div', 'messages', root);
     this.debug = el('div', 'debug', root);
+    this.debugLeft = el('div', 'debug-col', this.debug);
+    this.debugRight = el('div', 'debug-col right', this.debug);
     this.debug.style.display = 'none';
     this.showDebug = false;
     this.itemNameTimer = 0;
     this.lastSelectedId = null;
     this.prev = {};
     this.flash = 0;
+    this.hurtFlash = 0;
+    this.lastHealth = null;
+    this.ticker = 0;
   }
 
   message(text, seconds = 4) {
@@ -90,7 +109,7 @@ export class HUD {
     m.textContent = text;
     setTimeout(() => m.classList.add('fade'), seconds * 1000);
     setTimeout(() => m.remove(), seconds * 1000 + 800);
-    while (this.messages.children.length > 6) this.messages.firstChild.remove();
+    while (this.messages.children.length > 8) this.messages.firstChild.remove();
   }
 
   flashHotbar() {
@@ -102,11 +121,21 @@ export class HUD {
     this.debug.style.display = this.showDebug ? '' : 'none';
   }
 
+  setIcon(img, src, dy = 0) {
+    if (img.dataset.src !== src) {
+      img.dataset.src = src;
+      img.src = src;
+    }
+    const t = dy ? `translateY(calc(${dy} * var(--u)))` : '';
+    if (img.style.transform !== t) img.style.transform = t;
+  }
+
   update(dt) {
     const p = this.game.player;
     const inv = p.inventory;
+    this.ticker += dt;
     for (let i = 0; i < 9; i++) renderStack(this.slots[i], inv.slots[i]);
-    this.selector.style.transform = `translateX(calc(${inv.selected} * var(--slot)))`;
+    this.selector.style.left = `calc(${-1 + inv.selected * 20} * var(--u))`;
 
     const hand = inv.hand;
     const handId = hand ? hand.id : 0;
@@ -119,36 +148,58 @@ export class HUD {
     this.itemNameTimer -= dt;
     this.itemName.style.opacity = Math.max(0, Math.min(1, this.itemNameTimer));
 
+    // Health: blink with white outlines after damage, shake when low, bounce while regenerating.
     const hp = Math.ceil(p.health);
+    if (this.lastHealth !== null && hp < this.lastHealth) this.hurtFlash = 1;
+    this.lastHealth = hp;
+    if (this.hurtFlash > 0) this.hurtFlash -= dt;
+    const flash = this.hurtFlash > 0 && Math.floor(this.hurtFlash * 6.6) % 2 === 1;
+    const tick = Math.floor(this.ticker * 20);
+    const regen = p.regenTicks > 0 || (p.food >= 18 && p.health < 20);
+    for (let i = 0; i < 10; i++) {
+      const v = hp - i * 2;
+      const state = v >= 2 ? 'full' : v === 1 ? 'half' : 'empty';
+      let dy = 0;
+      if (hp <= 4) dy = ((tick * 7 + i * 13) % 3) - 1;
+      if (regen && p.regenTicks > 0 && i === tick % 25) dy -= 2;
+      this.setIcon(this.heartRow.icons[i], iconURL('heart', state, flash), dy);
+    }
+
     const food = p.food;
+    for (let i = 0; i < 10; i++) {
+      const v = food - i * 2;
+      const state = v >= 2 ? 'full' : v === 1 ? 'half' : 'empty';
+      const shake = p.saturation <= 0 && (tick + i * 7) % (food * 3 + 1) === 0 ? ((tick + i) % 3) - 1 : 0;
+      this.setIcon(this.foodRow.icons[i], iconURL('food', state), shake);
+    }
+
+    const armor = p.armorPoints ? p.armorPoints() : 0;
+    this.armorRow.row.style.visibility = armor > 0 ? 'visible' : 'hidden';
+    if (armor > 0) {
+      for (let i = 0; i < 10; i++) {
+        const v = armor - i * 2;
+        this.setIcon(this.armorRow.icons[i], iconURL('armor', v >= 2 ? 'full' : v === 1 ? 'half' : 'empty'));
+      }
+    }
+
     const air = p.air;
-    const lowHp = hp <= 4;
-    if (this.prev.hp !== hp || lowHp) {
-      this.prev.hp = hp;
-      for (let i = 0; i < 10; i++) {
-        const v = hp - i * 2;
-        const e = this.heartEls[i];
-        const src = hudSprite('heart', v >= 2 ? 'full' : v === 1 ? 'half' : 'empty');
-        if (e.getAttribute('src') !== src) e.src = src;
-        e.style.transform = lowHp ? `translateY(${Math.round(Math.random() * 2 - 1)}px)` : '';
-      }
-    }
-    if (this.prev.food !== food) {
-      this.prev.food = food;
-      for (let i = 0; i < 10; i++) {
-        const v = food - i * 2;
-        this.foodEls[i].src = hudSprite('food', v >= 2 ? 'full' : v === 1 ? 'half' : 'empty');
-      }
-    }
-    const underwater = air < 300;
-    this.bubbles.style.visibility = underwater ? 'visible' : 'hidden';
+    const underwater = air < 300 || p.eyeFluid === 16;
+    this.airRow.row.style.visibility = underwater ? 'visible' : 'hidden';
     if (underwater) {
-      const n = Math.ceil(Math.max(0, air) / 30);
+      const full = Math.ceil((Math.max(0, air) - 2) / 30);
+      const popping = Math.ceil(Math.max(0, air) / 30) - full;
       for (let i = 0; i < 10; i++) {
-        this.bubbleEls[i].style.visibility = i < n ? 'visible' : 'hidden';
-        if (!this.bubbleEls[i].src) this.bubbleEls[i].src = hudSprite('bubble', 'full');
+        const img = this.airRow.icons[i];
+        img.style.visibility = i < full + popping ? 'visible' : 'hidden';
+        this.setIcon(img, iconURL('bubble', i < full ? 'full' : 'empty'));
       }
     }
+
+    const level = p.xpLevel || 0;
+    const prog = p.xpProgress || 0;
+    this.xpFill.style.width = `calc(${Math.floor(prog * 182)} * var(--u))`;
+    const lvl = level > 0 ? String(level) : '';
+    if (this.xpLevel.textContent !== lvl) this.xpLevel.textContent = lvl;
 
     this.vignette.style.opacity = p.hurtTime > 0 ? Math.min(0.6, p.hurtTime * 2) : 0;
     this.waterOverlay.style.opacity = p.eyeFluid ? 1 : 0;
@@ -156,6 +207,20 @@ export class HUD {
     this.sleepOverlay.style.opacity = this.game.sleepFade || 0;
     if (this.flash > 0) this.flash -= dt;
 
-    if (this.showDebug) this.debug.textContent = this.game.debugText();
+    if (this.showDebug) {
+      const [left, right] = this.game.debugText();
+      this.fillDebug(this.debugLeft, left);
+      this.fillDebug(this.debugRight, right);
+    }
+  }
+
+  fillDebug(col, lines) {
+    while (col.children.length < lines.length) el('div', 'debug-line', col);
+    while (col.children.length > lines.length) col.lastChild.remove();
+    lines.forEach((t, i) => {
+      const line = col.children[i];
+      if (line.textContent !== t) line.textContent = t;
+      line.style.visibility = t ? 'visible' : 'hidden';
+    });
   }
 }

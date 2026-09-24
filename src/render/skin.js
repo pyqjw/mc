@@ -138,10 +138,30 @@ export function paintDefaultSkin() {
   return c;
 }
 
+let skinCanvas = null;
+export function getSkinCanvas() {
+  if (!skinCanvas) skinCanvas = paintDefaultSkin();
+  return skinCanvas;
+}
+
+// Flat front view of the skin (16x32 pixels), for places without a 3D view.
+export function drawSkinFront(ctx, dx = 0, dy = 0) {
+  const src = getSkinCanvas();
+  const parts = [
+    [8, 8, 8, 8, 4, 0], // head
+    [20, 20, 8, 12, 4, 8], // body
+    [44, 20, 4, 12, 0, 8], // right arm (viewer's left)
+    [36, 52, 4, 12, 12, 8], // left arm
+    [4, 20, 4, 12, 4, 20], // right leg
+    [20, 52, 4, 12, 8, 20], // left leg
+  ];
+  for (const [sx, sy, w, h, x, y] of parts) ctx.drawImage(src, sx, sy, w, h, dx + x, dy + y, w, h);
+}
+
 let skinTexture = null;
 export function getSkinTexture() {
   if (!skinTexture) {
-    skinTexture = new THREE.CanvasTexture(paintDefaultSkin());
+    skinTexture = new THREE.CanvasTexture(getSkinCanvas());
     skinTexture.magFilter = THREE.NearestFilter;
     skinTexture.minFilter = THREE.NearestFilter;
     skinTexture.generateMipmaps = false;

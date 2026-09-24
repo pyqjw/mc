@@ -4,6 +4,8 @@ import { iconURL, isIsoIcon } from './icons.js';
 import { clickSlot, moveInto, sameItem, cloneStack } from '../inventory.js';
 import { findRecipe, RECIPES, SMELTING } from '../crafting.js';
 import { FUEL, getItem, itemName, maxStack } from '../items.js';
+import { bookIconURL } from './gui.js';
+import { drawSkinFront } from '../render/skin.js';
 
 function el(tag, cls, parent, text) {
   const e = document.createElement(tag);
@@ -90,8 +92,32 @@ export class Screens {
     this.root.innerHTML = '';
     this.slotEls = [];
     const panel = el('div', 'panel', this.root);
-    el('div', 'panel-title', panel, title);
+    if (title) el('div', 'panel-title', panel, title);
     return panel;
+  }
+
+  bookButton(parent) {
+    const b = el('button', 'book-btn', parent);
+    const img = el('img', '', b);
+    img.src = bookIconURL();
+    b.title = '合成指南';
+    b.addEventListener('click', () => { this.game.sound('click'); this.toggleRecipeBook(); });
+    return b;
+  }
+
+  playerPreview(parent) {
+    const box = el('div', 'player-preview', parent);
+    const c = el('canvas', '', box);
+    c.width = 51;
+    c.height = 72;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.save();
+    ctx.translate(9.5, 3);
+    ctx.scale(2, 2);
+    drawSkinFront(ctx, 0, 0);
+    ctx.restore();
+    return box;
   }
 
   craftingArea(parent, size) {
@@ -113,21 +139,19 @@ export class Screens {
     this.current = { kind, data };
     this.root.style.display = 'flex';
     if (kind === 'inventory') {
-      const p = this.panel('物品栏');
+      const p = this.panel(null);
       const top = el('div', 'inv-top', p);
-      const preview = el('div', 'player-preview', top);
-      preview.innerHTML = '<div class="pp-head"></div><div class="pp-body"></div><div class="pp-legs"></div>';
+      this.playerPreview(top);
       const craftBox = el('div', 'craft-box', top);
       el('div', 'label', craftBox, '合成');
       this.craftingArea(craftBox, 2);
-      const book = el('button', 'mc-btn small', craftBox, '合成指南');
-      book.addEventListener('click', () => this.toggleRecipeBook());
+      this.bookButton(craftBox);
       this.playerGrid(p);
     } else if (kind === 'crafting') {
-      const p = this.panel('工作台');
-      this.craftingArea(p, 3);
-      const book = el('button', 'mc-btn small', p, '合成指南');
-      book.addEventListener('click', () => this.toggleRecipeBook());
+      const p = this.panel('合成');
+      const row = el('div', 'craft-row', p);
+      this.bookButton(row);
+      this.craftingArea(row, 3);
       el('div', 'label', p, '物品栏');
       this.playerGrid(p);
     } else if (kind === 'furnace') {
@@ -322,11 +346,18 @@ export class Screens {
       return;
     }
     const it = getItem(s.id);
-    let text = itemName(s.id);
-    if (it && it.tool) text += `\n耐久: ${it.tool.durability - (s.damage || 0)} / ${it.tool.durability}`;
-    if (it && it.food) text += `\n饥饿值 +${it.food.hunger}`;
-    this.tooltipEl.textContent = text;
-    this.tooltipEl.style.display = 'block';
+    const t = this.tooltipEl;
+    t.textContent = '';
+    el('div', '', t, itemName(s.id));
+    const extra = [];
+    if (it && it.food) extra.push(['blue', `饥饿值 +${it.food.hunger}`]);
+    if (it && it.tool) extra.push(['blue', `${it.tool.damage} 攻击伤害`]);
+    if (it && it.armor) extra.push(['blue', `+${it.armor.points} 盔甲值`]);
+    const maxDur = it && (it.tool ? it.tool.durability : it.durability);
+    if (maxDur && s.damage) extra.push(['', `耐久度：${maxDur - (s.damage || 0)} / ${maxDur}`]);
+    if (it) extra.push(['sub', `webcraft:${it.key}`]);
+    for (const [cls, line] of extra) el('div', cls, t, line);
+    t.style.display = 'block';
   }
 
   // Called every frame while a screen is open.

@@ -761,6 +761,7 @@ export class Game {
     const el = document.getElementById('death');
     el.style.display = 'flex';
     document.getElementById('death-cause').textContent = `玩家${DEATH_MESSAGES[this.deathCause] || '死了'}`;
+    document.querySelector('#death-score span').textContent = String(this.player.score || 0);
   }
 
   respawn() {
@@ -816,6 +817,7 @@ export class Game {
     this.renderer.setCrack(null);
   }
 
+  // F3 screen text: [left lines, right lines], like Minecraft's debug overlay.
   debugText() {
     const p = this.player.pos;
     const w = this.world;
@@ -823,25 +825,39 @@ export class Game {
     const y = Math.floor(p.y);
     const z = Math.floor(p.z);
     const col = w.generator.column(x, z);
-    const dirs = ['北 (-Z)', '西 (-X)', '南 (+Z)', '东 (+X)'];
+    const dirs = [['北', 'Z 轴负方向'], ['西', 'X 轴负方向'], ['南', 'Z 轴正方向'], ['东', 'X 轴正方向']];
     const yaw = ((this.player.yaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-    const facing = dirs[Math.round(yaw / (Math.PI / 2)) % 4];
+    const [dir, axis] = dirs[Math.round(yaw / (Math.PI / 2)) % 4];
+    const mcYaw = ((((-yaw * 180) / Math.PI + 180) % 360) + 360) % 360 - 180;
     const day = Math.floor(this.time / 24000) + 1;
     const t = this.time % 24000;
     const hours = Math.floor(((t / 1000) + 6) % 24);
     const mins = Math.floor(((t % 1000) / 1000) * 60);
-    const tgt = this.target ? `${BLOCKS[this.target.id].name} @ ${this.target.x} ${this.target.y} ${this.target.z}` : '无';
-    return [
-      `WebCraft 生存模式  ${this.fps} fps`,
-      `XYZ: ${p.x.toFixed(2)} / ${p.y.toFixed(2)} / ${p.z.toFixed(2)}`,
-      `区块: ${Math.floor(x / 16)} ${Math.floor(z / 16)}  (已加载 ${w.chunks.size})`,
-      `朝向: ${facing}`,
+    const left = [
+      `WebCraft 1.1（浏览器版）`,
+      `${this.fps} fps  ${w.stats.meshed} 次区块构建`,
+      `实体: ${this.mobs.mobs.length + this.drops.items.length}（生物 ${this.mobs.mobs.length}，掉落物 ${this.drops.items.length}）`,
+      '',
+      `XYZ: ${p.x.toFixed(3)} / ${p.y.toFixed(5)} / ${p.z.toFixed(3)}`,
+      `方块: ${x} ${y} ${z}`,
+      `区块: ${x & 15} ${y & 15} ${z & 15} 位于 ${Math.floor(x / 16)} ${Math.floor(z / 16)}（已加载 ${w.chunks.size}）`,
+      `朝向: ${dir}（朝向${axis}）(${mcYaw.toFixed(1)} / ${(-this.player.pitch * 180 / Math.PI).toFixed(1)})`,
+      `客户端光照: ${w.getLight(x, y + 1, z)}（天空: ${w.getSkyLight(x, y + 1, z)}，方块: ${w.getBlockLight(x, y + 1, z)}）`,
       `生物群系: ${BIOME_NAMES[col.biome]}`,
-      `光照: ${w.getLight(x, y + 1, z)} (天空 ${w.getSkyLight(x, y + 1, z)}, 方块 ${w.getBlockLight(x, y + 1, z)})`,
-      `第 ${day} 天  ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
-      `生物: ${this.mobs.mobs.length}  掉落物: ${this.drops.items.length}`,
+      `第 ${day} 天 ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
       `种子: ${this.meta.seed}`,
-      `目标方块: ${tgt}`,
-    ].join('\n');
+    ];
+    const gl = this.renderer.renderer.getContext();
+    const right = [
+      `WebGL ${gl instanceof WebGL2RenderingContext ? '2' : '1'}  光影: ${{ off: '关', medium: '中', high: '高' }[this.renderer.quality]}`,
+      `显示: ${window.innerWidth}x${window.innerHeight}  渲染距离: ${w.renderDistance}`,
+      `绘制调用: ${this.renderer.renderer.info.render.calls}`,
+      '',
+    ];
+    if (this.target) {
+      const tb = BLOCKS[this.target.id];
+      right.push('目标方块:', `${this.target.x}, ${this.target.y}, ${this.target.z}`, `webcraft:${tb.key}`, tb.name);
+    }
+    return [left, right];
   }
 }
