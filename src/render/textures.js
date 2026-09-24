@@ -101,103 +101,169 @@ const C = {
   snow: [242, 250, 250],
 };
 
+// Smooth tileable noise for this painter's tile (0..1 per texel).
+function tileField(p, blur = 1) {
+  return tileNoise(Math.floor(p.rand() * 1e9), blur);
+}
+
+// Minecraft-style stone: soft blotches in a few grey tones with scattered dark specks.
 function stone(p, base = C.stone) {
-  p.fill(() => {
-    const r = p.rand();
-    if (r < 0.1) return shade(base, -22 + p.rand() * 6);
-    if (r > 0.94) return shade(base, 14);
-    return shade(base, (p.rand() - 0.5) * 16);
+  const n = tileField(p);
+  p.fill((x, y) => {
+    const v = n[x + y * T] * 0.75 + p.rand() * 0.25;
+    let d = v < 0.3 ? -16 : v < 0.52 ? -5 : v < 0.78 ? 5 : 14;
+    if (p.rand() < 0.05) d = -24;
+    return shade(base, d);
   });
 }
 
 function dirt(p, base = C.dirt) {
-  p.fill(() => {
+  const n = tileField(p);
+  p.fill((x, y) => {
+    const v = n[x + y * T] * 0.6 + p.rand() * 0.4;
     const r = p.rand();
-    if (r < 0.12) return mul(base, 0.78);
-    if (r > 0.93) return mul(base, 1.15);
-    return shade(base, (p.rand() - 0.5) * 18);
+    if (r < 0.07) return mul(base, 0.66);
+    if (r > 0.95) return mul(base, 1.22);
+    return mul(base, v < 0.35 ? 0.86 : v < 0.65 ? 0.97 : 1.07);
   });
 }
 
+// Four boards, three texels of wood over a dark seam, with staggered end joints and grain streaks.
 function planks(p, base) {
-  const seams = [3, 11, 7, 14];
+  const joints = [3, 11, 7, 14];
+  const grain = new Float32Array(T * T).fill(1);
+  for (let row = 0; row < 4; row++) {
+    for (let line = 0; line < 3; line++) {
+      const y = row * 4 + line;
+      const n = 1 + Math.floor(p.rand() * 2);
+      for (let k = 0; k < n; k++) {
+        const x0 = Math.floor(p.rand() * T);
+        const len = 3 + Math.floor(p.rand() * 6);
+        const f = p.rand() < 0.65 ? 0.86 : 1.08;
+        for (let i = 0; i < len; i++) grain[((x0 + i) % T) + y * T] = f;
+      }
+    }
+  }
   p.fill((x, y) => {
     const row = y >> 2;
-    if (y % 4 === 3) return mul(base, 0.68);
-    if (x === seams[row]) return mul(base, 0.75);
-    const grain = Math.sin((x + row * 7) * 0.9 + y * 0.3) * 6;
-    return shade(base, grain + (p.rand() - 0.5) * 10);
+    if (y % 4 === 3) return mul(base, 0.64);
+    if (x === joints[row]) return mul(base, 0.72);
+    if (x === (joints[row] + 1) % T) return mul(base, 1.1);
+    const top = y % 4 === 0 ? 1.04 : 1;
+    return mul(base, grain[x + y * T] * top * (0.97 + p.rand() * 0.06));
   });
 }
 
+// Bark: irregular vertical streaks in three tones.
 function logSide(p, bark, stripe = 0.8) {
-  const cols = Array.from({ length: T }, () => (p.rand() < 0.35 ? stripe : 1));
-  p.fill((x) => mul(bark, cols[x] * (0.92 + p.rand() * 0.16)));
-}
-
-function logTop(p, inner, bark) {
-  p.fill((x, y) => {
-    const d = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
-    if (d > 6.5) return mul(bark, 0.9 + p.rand() * 0.2);
-    const ring = Math.floor(d) % 2 === 0 ? 1 : 0.82;
-    return mul(inner, ring * (0.95 + p.rand() * 0.1));
-  });
-}
-
-function leaves(p, base) {
-  p.fill(() => {
-    const r = p.rand();
-    if (r < 0.22) return [0, 0, 0, 0];
-    if (r < 0.4) return mul(base, 0.72);
-    if (r > 0.9) return mul(base, 1.2);
-    return shade(base, (p.rand() - 0.5) * 20);
-  });
-}
-
-// Greyscale leaves that take the biome foliage colour.
-function tintedLeaves(p) {
-  p.fill(() => {
-    const r = p.rand();
-    if (r < 0.2) return [0, 0, 0, 0];
-    if (r < 0.38) return gray(112 + p.rand() * 12);
-    if (r > 0.9) return gray(212);
-    return gray(160 + (p.rand() - 0.5) * 26);
-  });
-}
-
-function ore(p, spec) {
-  stone(p);
-  const n = 5 + Math.floor(p.rand() * 3);
-  for (let i = 0; i < n; i++) {
-    const cx = 2 + Math.floor(p.rand() * 12);
-    const cy = 2 + Math.floor(p.rand() * 12);
-    const size = 2 + Math.floor(p.rand() * 3);
-    for (let k = 0; k < size; k++) {
-      const x = cx + Math.floor(p.rand() * 3) - 1;
-      const y = cy + Math.floor(p.rand() * 3) - 1;
-      p.px(x, y, p.rand() < 0.35 ? mul(spec, 0.7) : spec);
+  const tones = [mul(bark, stripe * 0.92), mul(bark, 0.9), bark, mul(bark, 1.12)];
+  for (let x = 0; x < T; x++) {
+    let t = Math.floor(p.rand() * tones.length);
+    const start = Math.floor(p.rand() * T);
+    for (let k = 0; k < T; k++) {
+      const y = (start + k) % T;
+      if (p.rand() < 0.22) t = Math.max(0, Math.min(tones.length - 1, t + (p.rand() < 0.5 ? -1 : 1)));
+      p.px(x, y, shade(tones[t], (p.rand() - 0.5) * 6));
     }
   }
 }
 
-function cobble(p, base = [122, 122, 122]) {
+// Log end: rounded growth rings inside a ring of bark.
+function logTop(p, inner, bark) {
+  p.fill((x, y) => {
+    const dx = Math.abs(x - 7.5);
+    const dy = Math.abs(y - 7.5);
+    const cheb = Math.max(dx, dy);
+    if (cheb > 6.5) return mul(bark, 0.85 + p.rand() * 0.25);
+    const d = Math.hypot(dx, dy) * 0.8 + cheb * 0.2;
+    const ring = Math.floor(d / 1.6) % 2 === 0;
+    return mul(inner, (ring ? 1.04 : 0.86) * (0.97 + p.rand() * 0.06));
+  });
+}
+
+// Leaf clumps: lit on their upper left, with see-through gaps between them.
+function leafPattern(p, tone) {
+  const n = tileField(p);
+  const at = (x, y) => n[((x + T) % T) + ((y + T) % T) * T];
+  p.fill((x, y) => {
+    const v = at(x, y) * 0.7 + p.rand() * 0.3;
+    if (v < 0.27) return [0, 0, 0, 0];
+    const lit = at(x - 1, y - 1) < at(x, y) - 0.04;
+    const dim = at(x + 1, y + 1) < at(x, y) - 0.04;
+    return tone(lit ? 1.18 : dim ? 0.74 : v > 0.7 ? 1.05 : 0.92);
+  });
+}
+
+function leaves(p, base) {
+  leafPattern(p, (f) => mul(base, f));
+}
+
+// Greyscale leaves that take the biome foliage colour.
+function tintedLeaves(p) {
+  leafPattern(p, (f) => gray(Math.min(250, 168 * f)));
+}
+
+// Ore: stone with a few separate clusters of ore, each lit from the top left.
+const ORE_CLUSTERS = [
+  [[0, 0], [1, 0], [0, 1], [1, 1]],
+  [[1, 0], [0, 1], [1, 1], [2, 1], [1, 2]],
+  [[0, 0], [1, 0], [2, 0], [1, 1], [2, 1]],
+  [[0, 0], [1, 0], [1, 1]],
+  [[1, 0], [0, 1], [1, 1], [2, 1], [2, 2], [1, 2]],
+  [[0, 0], [0, 1], [1, 1]],
+];
+function ore(p, spec) {
+  stone(p);
+  const hi = mix(spec, [255, 255, 255], 0.38);
+  const dark = mul(spec, 0.62);
+  const centres = [];
+  for (let tries = 0; tries < 200 && centres.length < 5; tries++) {
+    const cx = 1 + Math.floor(p.rand() * 12);
+    const cy = 1 + Math.floor(p.rand() * 12);
+    if (centres.every(([x, y]) => Math.abs(x - cx) + Math.abs(y - cy) > 5)) centres.push([cx, cy]);
+  }
+  for (const [cx, cy] of centres) {
+    const shape = ORE_CLUSTERS[Math.floor(p.rand() * ORE_CLUSTERS.length)];
+    const has = (x, y) => shape.some(([a, b]) => a === x && b === y);
+    for (const [x, y] of shape) {
+      const s = (has(x, y - 1) ? 0 : 1) + (has(x - 1, y) ? 0 : 1) - (has(x, y + 1) ? 0 : 1) - (has(x + 1, y) ? 0 : 1);
+      p.px(cx + x, cy + y, s > 0 ? hi : s < 0 ? dark : spec);
+    }
+  }
+}
+
+// Rounded stones (a tileable Voronoi pattern), each shaded light on top-left and dark on
+// bottom-right, separated by dark mortar.
+function pebbles(p, count, tones, mortar, gap = 1.1) {
   const pts = [];
-  for (let i = 0; i < 11; i++) pts.push([p.rand() * 16, p.rand() * 16, 0.75 + p.rand() * 0.45]);
+  for (let i = 0; i < count; i++) pts.push([p.rand() * 16, p.rand() * 16, tones[Math.floor(p.rand() * tones.length)]]);
   p.fill((x, y) => {
     let d1 = 1e9;
     let d2 = 1e9;
     let best = 0;
+    let bdx = 0;
+    let bdy = 0;
     for (let i = 0; i < pts.length; i++) {
       for (let ox = -16; ox <= 16; ox += 16) for (let oy = -16; oy <= 16; oy += 16) {
         const dx = x + 0.5 - pts[i][0] - ox;
         const dy = y + 0.5 - pts[i][1] - oy;
         const d = Math.sqrt(dx * dx + dy * dy);
-        if (d < d1) { d2 = d1; d1 = d; best = i; } else if (d < d2) d2 = d;
+        if (d < d1) { d2 = d1; d1 = d; best = i; bdx = dx; bdy = dy; } else if (d < d2) d2 = d;
       }
     }
-    if (d2 - d1 < 1.1) return mul(base, 0.55);
-    return mul(base, pts[best][2] * (0.93 + p.rand() * 0.14));
+    if (d2 - d1 < gap) return shade(mortar, (p.rand() - 0.5) * 8);
+    const base = pts[best][2];
+    const edge = d2 - d1 < gap + 1.6;
+    const lightness = -(bdx + bdy) / (d1 + 0.5);
+    let f = 1;
+    if (edge && lightness > 0.4) f = 1.2;
+    else if (edge && lightness < -0.4) f = 0.78;
+    return mul(base, f * (0.95 + p.rand() * 0.1));
   });
+}
+
+function cobble(p) {
+  pebbles(p, 12, [[116, 116, 116], [130, 130, 130], [104, 104, 104], [142, 142, 142]], [74, 74, 74], 0.8);
 }
 
 function bordered(p, base, border, noiseAmt = 10) {
@@ -382,19 +448,23 @@ function flower(p, kind, petal, centre) {
 const PAINTERS = {
   stone: (p) => stone(p),
   dirt: (p) => dirt(p),
-  grass_top: (p) => p.fill(() => {
-    const r = p.rand();
-    if (r < 0.14) return gray(146 + p.rand() * 8);
-    if (r > 0.9) return gray(204 + p.rand() * 10);
-    return gray(172 + (p.rand() - 0.5) * 18);
-  }),
+  grass_top: (p) => {
+    const n = tileField(p);
+    p.fill((x, y) => {
+      const v = n[x + y * T] * 0.55 + p.rand() * 0.45;
+      return gray(v < 0.3 ? 142 : v < 0.5 ? 160 : v < 0.7 ? 176 : v < 0.85 ? 192 : 210);
+    });
+  },
   grass_side: (p) => {
     dirt(p);
-    const depth = Array.from({ length: T }, () => (p.rand() < 0.2 ? 5 : 3) + Math.floor(p.rand() * 2));
+    // Grass hanging over the dirt in uneven strands.
+    const depth = Array.from({ length: T }, () => 3 + Math.floor(p.rand() * 2));
+    for (let i = 0; i < 4; i++) depth[Math.floor(p.rand() * T)] = 5 + Math.floor(p.rand() * 2);
     p.fill((x, y) => {
       if (y >= depth[x]) return null;
       const r = p.rand();
-      return gray(r < 0.15 ? 150 : r > 0.88 ? 205 : 172 + (p.rand() - 0.5) * 18);
+      if (y === depth[x] - 1) return gray(r < 0.5 ? 140 : 152);
+      return gray(r < 0.2 ? 150 : r > 0.85 ? 206 : 176 + (p.rand() - 0.5) * 14);
     });
   },
   cobblestone: (p) => cobble(p),
@@ -405,11 +475,13 @@ const PAINTERS = {
     const pal = [[50, 50, 50], [90, 90, 90], [25, 25, 25], [130, 130, 130], [70, 70, 70]];
     return pal[Math.floor(p.rand() * pal.length)];
   }),
-  sand: (p) => p.noise(C.sand, 18),
-  gravel: (p) => p.fill(() => {
-    const pal = [[132, 126, 124], [104, 98, 95], [155, 145, 140], [118, 108, 100], [90, 88, 88]];
-    return shade(pal[Math.floor(p.rand() * pal.length)], (p.rand() - 0.5) * 8);
+  sand: (p) => p.fill(() => {
+    const r = p.rand();
+    if (r < 0.08) return mul(C.sand, 0.86);
+    if (r > 0.93) return mul(C.sand, 1.05);
+    return shade(C.sand, (p.rand() - 0.5) * 10);
   }),
+  gravel: (p) => pebbles(p, 22, [[136, 128, 126], [112, 106, 104], [158, 150, 146], [124, 112, 104], [96, 94, 94]], [82, 78, 78], 0.7),
   oak_log: (p) => logSide(p, [104, 82, 50]),
   oak_log_top: (p) => logTop(p, [170, 136, 82], [104, 82, 50]),
   birch_log: (p) => {
@@ -448,23 +520,59 @@ const PAINTERS = {
   },
   crafting_table_side: (p) => {
     planks(p, C.oakPlanks);
-    p.rect(0, 0, 15, 2, (x) => shade([100, 70, 40], (x % 3) * 4));
-    p.rect(3, 5, 4, 12, [120, 120, 120]); // saw blade
-    p.rect(2, 4, 5, 4, [90, 60, 30]);
-    p.rect(10, 5, 13, 7, [140, 140, 140]); // hammer head
-    p.rect(11, 8, 12, 13, [90, 60, 30]);
+    p.rect(0, 0, 15, 2, (x, y) => (y === 2 ? [70, 48, 24] : shade([112, 80, 44], (x % 3) * 5)));
+    // A saw and a hammer hanging on the side.
+    pixmap(p, [
+      '................',
+      '................',
+      '................',
+      '...bb...........',
+      '..bBBb....kkkkk.',
+      '..bBBb....kgggk.',
+      '..kssk....kgGgk.',
+      '..kssk....kkwkk.',
+      '..kssk.....kwk..',
+      '..kssk.....kwk..',
+      '..ksSk.....kwk..',
+      '..ksSk.....kwk..',
+      '..ksSk.....kwk..',
+      '..ktttk....kWk..',
+      '...kkk.....kkk..',
+    ], { b: [110, 72, 36], B: [140, 96, 50], k: [48, 32, 16], s: [180, 180, 180], S: [140, 140, 140], t: [120, 120, 120],
+      g: [150, 150, 150], G: [200, 200, 200], w: [120, 84, 40], W: [90, 62, 30] });
   },
   crafting_table_front: (p) => {
     planks(p, C.oakPlanks);
-    p.rect(0, 0, 15, 2, (x) => shade([100, 70, 40], (x % 3) * 4));
-    p.rect(3, 5, 12, 6, [110, 110, 110]);
-    p.rect(7, 7, 8, 13, [90, 60, 30]);
-    p.rect(2, 11, 4, 13, [150, 150, 150]);
+    p.rect(0, 0, 15, 2, (x, y) => (y === 2 ? [70, 48, 24] : shade([112, 80, 44], (x % 3) * 5)));
+    // Pliers and a mallet.
+    pixmap(p, [
+      '................',
+      '................',
+      '................',
+      '................',
+      '..kkkkkkk.......',
+      '..kGGGGgk..kk...',
+      '..kkkwkkk.kGgk..',
+      '.....kwk..kggk..',
+      '.....kwk...kwk..',
+      '.....kwk...kwk..',
+      '.....kwk..kwk...',
+      '.....kwk..kwk...',
+      '.....kWk.kwk....',
+      '.....kkk.kWk....',
+      '.........kkk....',
+    ], { k: [48, 32, 16], g: [140, 140, 140], G: [196, 196, 196], w: [120, 84, 40], W: [90, 62, 30] });
   },
   furnace_side: (p) => {
-    p.fill((x, y) => shade([118, 118, 118], (p.rand() - 0.5) * 10 + (y === 0 || y === 15 ? -25 : 0)));
+    stone(p, [118, 118, 118]);
+    p.rect(0, 0, 15, 0, [78, 78, 78]);
+    p.rect(0, 1, 15, 1, [150, 150, 150]);
+    p.rect(0, 15, 15, 15, [78, 78, 78]);
   },
-  furnace_top: (p) => bordered(p, [125, 125, 125], [90, 90, 90], 12),
+  furnace_top: (p) => {
+    stone(p, [124, 124, 124]);
+    p.fill((x, y) => (x === 0 || y === 0 || x === 15 || y === 15 ? [86, 86, 86] : x === 1 || y === 1 ? [150, 150, 150] : null));
+  },
   furnace_front: (p) => {
     PAINTERS.furnace_side(p);
     p.rect(3, 2, 12, 5, (x) => shade([100, 100, 100], (x % 2) * 6));
@@ -548,12 +656,17 @@ const PAINTERS = {
     p.line(7, 8, 8, 3, brown);
   },
   clay: (p) => p.noise([160, 166, 180], 10),
-  bricks: (p) => p.fill((x, y) => {
-    const row = y >> 2;
-    if (y % 4 === 3) return [175, 170, 160];
-    if ((row % 2 === 0 && (x === 7 || x === 15)) || (row % 2 === 1 && (x === 3 || x === 11))) return [175, 170, 160];
-    return shade([150, 72, 55], (p.rand() - 0.5) * 20);
-  }),
+  bricks: (p) => {
+    const tones = Array.from({ length: 8 }, () => [140 + p.rand() * 26, 64 + p.rand() * 14, 48 + p.rand() * 10]);
+    p.fill((x, y) => {
+      const row = y >> 2;
+      if (y % 4 === 3) return shade([168, 160, 152], (p.rand() - 0.5) * 10);
+      const off = row % 2 === 0 ? 0 : 4;
+      if ((x + off) % 8 === 7) return shade([168, 160, 152], (p.rand() - 0.5) * 10);
+      const tone = tones[(row * 2 + Math.floor(((x + off) % 16) / 8)) % 8];
+      return mul(tone, (y % 4 === 0 ? 1.12 : 1) * (0.94 + p.rand() * 0.12));
+    });
+  },
   chest_side: (p) => p.fill((x, y) => {
     if (x === 0 || x === 15 || y === 0 || y === 15 || y === 5) return [75, 48, 20];
     return shade([165, 112, 48], (p.rand() - 0.5) * 14 + (y % 4 === 0 ? -8 : 0));
@@ -923,93 +1036,181 @@ export function makeCrackCanvases() {
 }
 
 // ---------- item sprites ----------
-const STICK_L = [150, 115, 60];
-const STICK_D = [95, 70, 35];
+// Minecraft item style: every sprite has a dark outline and is lit from the top left.
+const STICK = [137, 103, 58];
+const STICK_L = [168, 130, 76];
 
-function handle(p, x0, y0, x1, y1) {
-  p.line(x0, y0, x1, y1, STICK_L);
-  p.line(x0 + 1, y0, x1 + 1, y1, STICK_D);
+// Five tones of a colour: outline, dark, mid, light and highlight.
+function ramp(c) {
+  return { o: mul(c, 0.3), d: mul(c, 0.7), m: [c[0], c[1], c[2], 255], l: mul(c, 1.15), h: mix(c, [255, 255, 255], 0.5) };
+}
+
+// Adds a dark outline: each empty texel beside the sprite takes a darkened copy of its neighbour.
+function outline(p, f = 0.32) {
+  const add = [];
+  for (let y = 0; y < T; y++) {
+    for (let x = 0; x < T; x++) {
+      if (p.get(x, y)[3] !== 0) continue;
+      for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= T || ny >= T) continue;
+        const c = p.get(nx, ny);
+        if (c[3] === 0) continue;
+        add.push([x, y, mul(c, f)]);
+        break;
+      }
+    }
+  }
+  for (const [x, y, c] of add) p.px(x, y, c);
+}
+
+// Fills the texels for which inside(x, y) is true with a ramp, light on the upper-left edges of
+// the shape and dark on the lower-right ones.
+function shaded(p, inside, r) {
+  for (let y = 0; y < T; y++) {
+    for (let x = 0; x < T; x++) {
+      if (!inside(x, y)) continue;
+      const s = (inside(x, y - 1) ? 0 : 1) + (inside(x - 1, y) ? 0 : 1) - (inside(x, y + 1) ? 0 : 1) - (inside(x + 1, y) ? 0 : 1);
+      p.px(x, y, s >= 2 ? r.h : s > 0 ? r.l : s < 0 ? r.d : r.m);
+    }
+  }
+}
+
+function maskFn(rows, ch = '#') {
+  return (x, y) => y >= 0 && y < rows.length && x >= 0 && x < rows[y].length && rows[y][x] === ch;
+}
+
+// Diagonal stick from the bottom-left corner up to (x1, 15 - x1).
+function handle(p, x0, x1) {
+  for (let x = x0; x <= x1; x++) p.px(x, 15 - x, x % 2 ? STICK_L : STICK);
 }
 
 function blob(p, cx, cy, r, color, rand) {
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
     const d = Math.hypot(x - cx, y - cy);
-    if (d <= r) p.px(x, y, mul(color, d > r - 1 ? 0.7 : 0.9 + rand() * 0.25));
+    if (d <= r) p.px(x, y, mul(color, d > r - 1 ? 0.8 : 0.9 + rand() * 0.2));
   }
 }
 
-function ingot(p, color) {
-  const dark = mul(color, 0.6);
-  for (let y = 5; y <= 11; y++) {
-    const x0 = 2 + Math.max(0, 7 - y) + (y > 9 ? 0 : 0);
-    const x1 = 13 - Math.max(0, y - 9);
-    for (let x = x0; x <= x1; x++) {
-      let c = color;
-      if (y === 5 || x === x0) c = mul(color, 1.2);
-      if (y === 11 || x === x1) c = dark;
-      p.px(x, y, c);
-    }
+// Round sprite shaded like a ball lit from the top left.
+function ball(p, cx, cy, rx, ry, color, rand, speckle = 0.08) {
+  const r = ramp(color);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    const dx = (x + 0.5 - cx) / rx;
+    const dy = (y + 0.5 - cy) / ry;
+    const d = dx * dx + dy * dy;
+    if (d > 1) continue;
+    const lit = -(dx + dy) * 0.7 + (1 - d) * 0.3;
+    let c = lit > 0.55 ? r.h : lit > 0.2 ? r.l : lit > -0.35 ? r.m : r.d;
+    if (rand() < speckle) c = mul(c, 0.9);
+    p.px(x, y, c);
   }
+}
+
+const TOOL_HEADS = {
+  pickaxe: [
+    '................',
+    '.....######.....',
+    '...#########....',
+    '..###....####...',
+    '............##..',
+    '............###.',
+    '............###.',
+    '.............##.',
+    '.............##.',
+    '.............##.',
+    '.............##.',
+    '............##..',
+    '............##..',
+    '............#...',
+  ],
+  axe: [
+    '................',
+    '.......###......',
+    '......######....',
+    '.....########...',
+    '.....######.##..',
+    '.....#####..###.',
+    '......###....#..',
+    '.......#........',
+  ],
+  shovel: [
+    '................',
+    '..........###...',
+    '.........#####..',
+    '........######..',
+    '........#####...',
+    '.........###....',
+  ],
+  hoe: [
+    '................',
+    '.......######...',
+    '......#######...',
+    '......##....#...',
+    '......#.........',
+  ],
+};
+
+function tool(p, type, color) {
+  const head = ramp(color);
+  if (type === 'sword') {
+    // Blade along the diagonal, a cross guard, grip and pommel (u runs along the blade, v across).
+    const blade = (x, y) => {
+      const u = x - y;
+      const v = x + y;
+      return (v === 15 || v === 16) && u >= -3 && u <= 12;
+    };
+    shaded(p, blade, head);
+    const guard = ramp([74, 52, 26]);
+    shaded(p, (x, y) => {
+      const u = x - y;
+      const v = x + y;
+      return (u === -4 || u === -5) && v >= 11 && v <= 20;
+    }, guard);
+    handle(p, 2, 4);
+    p.px(1, 14, guard.l);
+    outline(p);
+    return;
+  }
+  const rows = TOOL_HEADS[type];
+  handle(p, 2, type === 'shovel' ? 9 : type === 'hoe' ? 12 : 11);
+  shaded(p, maskFn(rows), head);
+  outline(p);
+}
+
+function ingot(p, color) {
+  // A bar seen from above: light top face, front face and dark right end.
+  pixmap(p, [
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+    '.....hhhhhhhhl..',
+    '....hllllllllmd.',
+    '...hllllllllmdd.',
+    '..hmmmmmmmmmddd.',
+    '..lmmmmmmmmmdd..',
+    '..lmmmmmmmmmd...',
+    '..dddddddddd....',
+  ], ramp(color));
+  outline(p);
 }
 
 function meat(p, color, fat, rand) {
   for (let y = 3; y < 14; y++) for (let x = 2; x < 14; x++) {
     const d = Math.hypot((x - 7.5) / 6, (y - 8) / 5);
     if (d > 1) continue;
-    let c = mul(color, 0.85 + rand() * 0.3);
-    if (d > 0.82) c = fat;
+    let c = mul(color, 0.88 + rand() * 0.24);
+    if (d > 0.8) c = fat;
+    else if (x + y < 12 && d > 0.55) c = mul(color, 1.15);
     p.px(x, y, c);
   }
-  p.rect(12, 11, 14, 13, [230, 225, 210]);
+  p.rect(12, 11, 14, 13, [236, 230, 214]);
+  p.px(14, 13, [200, 194, 176]);
+  outline(p);
 }
-
-function tool(p, type, color) {
-  const light = mul(color, 1.15);
-  const dark = mul(color, 0.6);
-  switch (type) {
-    case 'pickaxe':
-      handle(p, 3, 13, 10, 6);
-      p.line(4, 2, 9, 2, light);
-      p.line(3, 3, 10, 3, color);
-      p.line(10, 3, 13, 6, color);
-      p.line(11, 3, 14, 6, dark);
-      p.line(13, 7, 13, 12, color);
-      p.line(14, 7, 14, 11, dark);
-      p.line(2, 4, 3, 4, dark);
-      break;
-    case 'axe':
-      handle(p, 3, 13, 11, 5);
-      p.rect(7, 2, 11, 4, color);
-      p.rect(6, 3, 8, 8, color);
-      p.line(7, 2, 11, 2, light);
-      p.line(6, 8, 8, 8, dark);
-      p.line(5, 3, 5, 7, light);
-      break;
-    case 'shovel':
-      handle(p, 3, 13, 9, 7);
-      p.rect(9, 3, 12, 6, color);
-      p.line(10, 2, 13, 2, light);
-      p.line(13, 3, 13, 5, dark);
-      p.line(9, 7, 11, 7, dark);
-      break;
-    case 'sword':
-      p.line(4, 11, 13, 2, color);
-      p.line(5, 11, 14, 2, dark);
-      p.line(4, 10, 12, 2, light);
-      p.line(2, 9, 6, 13, [60, 40, 20]);
-      p.line(3, 9, 7, 13, [80, 55, 25]);
-      handle(p, 1, 14, 3, 12);
-      break;
-    case 'hoe':
-      handle(p, 3, 13, 11, 5);
-      p.rect(7, 2, 12, 3, color);
-      p.line(7, 2, 12, 2, light);
-      p.rect(12, 4, 13, 5, dark);
-      break;
-    default:
-  }
-}
-
 
 // Paints a sprite from string rows using a palette of characters ('.' = transparent).
 function pixmap(p, rows, pal) {
@@ -1149,43 +1350,109 @@ export function getBowCanvas(pull) {
   return c;
 }
 
+function coalLump(p, color) {
+  pixmap(p, [
+    '................',
+    '................',
+    '......mmmm......',
+    '....mmlhmmmm....',
+    '...mlhlmmmmdm...',
+    '..mlllmmmmmddm..',
+    '..mllmmmdmmmdd..',
+    '.mmlmmmmmmmdddm.',
+    '.mmmmmdmmmmmddm.',
+    '.dmmmmmmmmmdddd.',
+    '..dmmmmmmmdddd..',
+    '...ddmmmdddd....',
+    '....dddddd......',
+  ], ramp(color));
+  outline(p, 0.45);
+}
+
+function bucket(p, liquid) {
+  pixmap(p, [
+    '................',
+    '................',
+    '................',
+    '...hhhhhhhhhh...',
+    '..hxxxxxxxxxxm..',
+    '..lhxxxxxxxxmd..',
+    '..llhhhhhhhmmd..',
+    '...llllllmmdd...',
+    '...lllllmmmdd...',
+    '....llllmmdd....',
+    '....llmmmmdd....',
+    '.....dddddd.....',
+  ], { ...ramp([196, 196, 196]), x: [44, 44, 44] });
+  if (liquid) {
+    for (let x = 3; x <= 12; x++) p.px(x, 4, liquid[1]);
+    for (let x = 4; x <= 11; x++) p.px(x, 5, liquid[0]);
+  }
+  outline(p);
+}
+
+function fruit(p, color, rand) {
+  ball(p, 8, 9.5, 5.5, 5, color, rand, 0.05);
+  p.px(5, 7, [255, 255, 255]);
+  p.rect(8, 2, 8, 4, [96, 64, 30]);
+  p.px(9, 3, [70, 160, 40]);
+  p.px(10, 3, [70, 160, 40]);
+  p.px(10, 2, [96, 190, 60]);
+  p.px(11, 2, [70, 160, 40]);
+  outline(p);
+}
+
 const ITEM_PAINTERS = {
   lapis_lazuli: (p, r) => { for (let i = 0; i < 5; i++) blob(p, 4 + r() * 8, 4 + r() * 8, 2 + r() * 1.5, [40, 80, 200], r); },
   redstone: (p, r) => { for (let i = 0; i < 40; i++) { const a = r() * Math.PI * 2; const d = Math.sqrt(r()) * 5; p.px(Math.round(7.5 + Math.cos(a) * d), Math.round(9 + Math.sin(a) * d * 0.7), mul([200, 20, 20], 0.6 + r() * 0.6)); } },
   emerald: (p) => {
-    const c = [40, 200, 100];
-    for (let y = 2; y < 14; y++) {
-      const w = y < 5 ? y - 1 : y > 10 ? 14 - y : 4;
-      for (let x = 8 - w; x < 8 + w; x++) p.px(x, y, mul(c, x < 7 ? 1.2 : 0.85));
-    }
+    pixmap(p, [
+      '................',
+      '.......hh.......',
+      '......hllm......',
+      '.....hlllmm.....',
+      '....hlhllmmd....',
+      '....hllllmmd....',
+      '...hlllllmmmd...',
+      '...hllllmmmmd...',
+      '...lllllmmmmd...',
+      '....lllmmmmd....',
+      '....llmmmmdd....',
+      '.....lmmmdd.....',
+      '......mmdd......',
+      '.......dd.......',
+    ], ramp([36, 196, 96]));
+    outline(p);
   },
-  stick: (p) => handle(p, 4, 12, 11, 5),
-  coal: (p, r) => blob(p, 7.5, 8, 5, [40, 40, 40], r),
-  charcoal: (p, r) => blob(p, 7.5, 8, 5, [55, 45, 35], r),
+  stick: (p) => { handle(p, 3, 12); outline(p); },
+  coal: (p) => coalLump(p, [52, 52, 52]),
+  charcoal: (p) => coalLump(p, [66, 56, 44]),
   iron_ingot: (p) => ingot(p, [215, 215, 215]),
   gold_ingot: (p) => ingot(p, [250, 215, 60]),
   brick: (p) => ingot(p, [160, 80, 55]),
   diamond: (p) => {
-    const c = [90, 235, 225];
-    for (let y = 3; y < 13; y++) {
-      const w = y < 6 ? 2 + (y - 3) * 2 : Math.max(0, 12 - y) * 1;
-      for (let x = 8 - w; x <= 7 + w; x++) p.px(x, y, mul(c, y < 6 ? 1.15 : 0.9 + ((x + y) % 3) * 0.08));
-    }
+    pixmap(p, [
+      '................',
+      '................',
+      '................',
+      '.....hhhhhh.....',
+      '....hhllllmm....',
+      '...hlhllllmmd...',
+      '..hlllllllmmmd..',
+      '..dmmmmmmmmmdd..',
+      '...dmmmmmmmdd...',
+      '....dmmmmmdd....',
+      '.....dmmmdd.....',
+      '......dmdd......',
+      '.......dd.......',
+    ], ramp([74, 222, 214]));
+    outline(p);
   },
-  bucket: (p) => {
-    const g = [190, 190, 190];
-    for (let y = 5; y < 14; y++) {
-      const inset = Math.floor((y - 5) / 3);
-      p.line(3 + inset, y, 12 - inset, y, y === 5 ? [120, 120, 120] : g);
-      p.px(3 + inset, y, [140, 140, 140]);
-      p.px(12 - inset, y, [110, 110, 110]);
-    }
-    p.line(4, 4, 11, 4, [100, 100, 100]);
-  },
-  water_bucket: (p) => { ITEM_PAINTERS.bucket(p); p.line(4, 5, 11, 5, [50, 90, 220]); p.line(4, 6, 11, 6, [60, 110, 230]); },
-  lava_bucket: (p) => { ITEM_PAINTERS.bucket(p); p.line(4, 5, 11, 5, [240, 120, 20]); p.line(4, 6, 11, 6, [250, 180, 40]); },
-  apple: (p, r) => { blob(p, 7.5, 9, 5, [210, 30, 30], r); p.line(8, 2, 8, 4, [90, 60, 30]); p.px(9, 3, [60, 150, 40]); p.px(10, 2, [60, 150, 40]); p.px(6, 7, [255, 150, 150]); },
-  golden_apple: (p, r) => { blob(p, 7.5, 9, 5, [250, 210, 50], r); p.line(8, 2, 8, 4, [90, 60, 30]); p.px(9, 3, [60, 150, 40]); p.px(6, 7, [255, 255, 200]); },
+  bucket: (p) => bucket(p, null),
+  water_bucket: (p) => bucket(p, [[48, 86, 214], [66, 112, 232]]),
+  lava_bucket: (p) => bucket(p, [[232, 110, 20], [252, 176, 40]]),
+  apple: (p, r) => fruit(p, [206, 28, 30], r),
+  golden_apple: (p, r) => fruit(p, [248, 206, 48], r),
   porkchop: (p, r) => meat(p, [235, 140, 140], [250, 220, 215], r),
   cooked_porkchop: (p, r) => meat(p, [180, 120, 70], [220, 190, 140], r),
   beef: (p, r) => meat(p, [200, 50, 45], [240, 200, 200], r),
@@ -1195,7 +1462,7 @@ const ITEM_PAINTERS = {
   rotten_flesh: (p, r) => meat(p, [130, 110, 60], [100, 140, 70], r),
   gunpowder: (p, r) => { for (let i = 0; i < 45; i++) { const a = r() * Math.PI * 2; const d = Math.sqrt(r()) * 5; p.px(Math.round(7.5 + Math.cos(a) * d), Math.round(9 + Math.sin(a) * d * 0.7), mul([90, 90, 90], 0.6 + r() * 0.8)); } },
   leather: (p, r) => { for (let y = 3; y < 14; y++) for (let x = 3; x < 13; x++) if (!((x === 3 || x === 12) && (y === 3 || y === 13))) p.px(x, y, mul([150, 85, 45], 0.85 + r() * 0.3)); },
-  clay_ball: (p, r) => blob(p, 7.5, 8.5, 4.5, [165, 170, 185], r),
+  clay_ball: (p, r) => { ball(p, 8, 8.5, 5, 4.5, [160, 166, 182], r); outline(p); },
   flint: (p, r) => { for (let y = 3; y < 13; y++) { const w = Math.round(4 - Math.abs(y - 7) * 0.5); for (let x = 7 - w; x <= 7 + w; x++) p.px(x, y, mul([60, 60, 62], 0.8 + r() * 0.5)); } },
   wheat_seeds: (p, r) => { for (let i = 0; i < 7; i++) { const x = 3 + Math.floor(r() * 10); const y = 4 + Math.floor(r() * 9); p.px(x, y, [70, 150, 40]); p.px(x, y + 1, [50, 110, 30]); } },
   wheat: (p) => { for (let i = 0; i < 5; i++) { p.line(3 + i * 2, 14, 6 + i, 3, [200, 170, 60]); p.px(6 + i, 3, [230, 200, 90]); p.px(6 + i, 4, [230, 200, 90]); } p.line(4, 10, 12, 10, [140, 110, 40]); },
@@ -1209,7 +1476,7 @@ const ITEM_PAINTERS = {
   },
   paper: (p) => { p.rect(3, 2, 12, 13, (x, y) => (x === 12 || y === 13 ? [200, 200, 190] : [245, 245, 238])); p.line(5, 5, 10, 5, [210, 210, 200]); p.line(5, 8, 10, 8, [210, 210, 200]); },
   book: (p) => { p.rect(3, 2, 12, 13, (x, y) => (x === 3 || y === 2 || y === 13 ? [90, 50, 25] : [120, 70, 35])); p.rect(11, 3, 12, 12, [240, 235, 220]); p.rect(5, 5, 9, 6, [200, 160, 60]); },
-  snowball: (p, r) => blob(p, 7.5, 8, 5, [244, 250, 252], r),
+  snowball: (p, r) => { ball(p, 8, 8.5, 5, 5, [236, 244, 250], r, 0); outline(p, 0.55); },
   bowl: (p) => { for (let y = 7; y < 13; y++) { const w = 6 - Math.max(0, y - 9); p.line(8 - w, y, 7 + w, y, y === 7 ? [90, 62, 32] : [140, 100, 56]); } },
   mushroom_stew: (p) => { ITEM_PAINTERS.bowl(p); p.line(3, 7, 12, 7, [150, 100, 60]); p.line(4, 6, 11, 6, [170, 120, 70]); p.px(6, 6, [200, 60, 50]); p.px(9, 6, [120, 90, 60]); },
   bone: (p) => {
@@ -1284,6 +1551,10 @@ const ITEM_PAINTERS = {
   bread: (p, r) => { for (let y = 5; y < 12; y++) for (let x = 1; x < 15; x++) { const d = Math.hypot((x - 7.5) / 7, (y - 8.5) / 3.6); if (d <= 1) p.px(x, y, d > 0.8 ? [130, 80, 30] : mul(y < 7 ? [190, 130, 55] : [170, 110, 45], 0.9 + r() * 0.2)); } },
 };
 
+// Painters above that leave the outline to getItemCanvas.
+const AUTO_OUTLINE = new Set(['lapis_lazuli', 'redstone', 'gunpowder', 'leather', 'flint', 'wheat_seeds', 'wheat', 'oak_door', 'paper', 'book',
+  'bowl', 'mushroom_stew', 'bone', 'bone_meal', 'feather', 'arrow', 'egg', 'spider_eye', 'bread', 'string']);
+
 const itemCanvasCache = new Map();
 
 // 16x16 canvas for a non-block item.
@@ -1302,6 +1573,7 @@ export function getItemCanvas(id) {
     armorSprite(p, it.armor.slot, ARMOR_MATERIALS.find((m) => m.key === it.armor.material).color);
   } else if (it && ITEM_PAINTERS[it.key]) {
     ITEM_PAINTERS[it.key](p, rand);
+    if (AUTO_OUTLINE.has(it.key)) outline(p);
   } else {
     p.rect(4, 4, 11, 11, [255, 0, 255]);
   }
