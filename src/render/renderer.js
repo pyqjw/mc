@@ -89,6 +89,7 @@ export class Renderer {
       skyHorizon: { value: new THREE.Color() },
     };
     this.quality = 'off';
+    this.flash = 0;
     this.shadows = null;
     this.post = null;
     this.sunScreen = new THREE.Vector2();
@@ -256,8 +257,12 @@ export class Renderer {
     this.crackMat.map = this.crackTextures[Math.min(9, stage)];
   }
 
-  // time: 0..24000 ticks. Returns daylight factor.
-  updateSky(time, renderDistance, underwater, inLava) {
+  // time: 0..24000 ticks; weather: { rain, thunder } strengths. Returns the daylight factor.
+  updateSky(time, renderDistance, underwater, inLava, weather = null) {
+    const rain = weather ? weather.rain : 0;
+    const thunder = weather ? weather.thunder : 0;
+    const flash = this.flash || 0;
+    if (this.flash > 0) this.flash = Math.max(0, this.flash - 0.05);
     const t = time / 24000;
     const angle = t * Math.PI * 2; // 0 = sunrise (east, +x)
     const sunY = Math.sin(angle);
@@ -275,7 +280,24 @@ export class Renderer {
     const glow = Math.max(0, 1 - Math.abs(sunY) / 0.3) * 0.65;
     if (glow > 0) horizon = lerpColor(horizon, new THREE.Color(1.0, 0.55, 0.3), glow);
 
-    const daylight = 0.25 + 0.75 * day;
+    // Rain and thunder grey out and darken the sky (Minecraft's formula) and dim sky light.
+    const grey = (c, k, f) => {
+      const l = (c.r * 0.3 + c.g * 0.59 + c.b * 0.11) * f;
+      c.setRGB(c.r * (1 - k) + l * k, c.g * (1 - k) + l * k, c.b * (1 - k) + l * k);
+    };
+    if (rain > 0) {
+      grey(top, rain * 0.75, 0.6);
+      grey(horizon, rain * 0.75, 0.6);
+    }
+    if (thunder > 0) {
+      grey(top, thunder * 0.75, 0.2);
+      grey(horizon, thunder * 0.75, 0.2);
+    }
+    if (flash > 0) {
+      top.lerp(new THREE.Color(0.8, 0.82, 0.9), flash * 0.6);
+      horizon.lerp(new THREE.Color(0.8, 0.82, 0.9), flash * 0.6);
+    }
+    const daylight = Math.max((0.25 + 0.75 * day) * (1 - rain * 5 / 16) * (1 - thunder * 5 / 16), flash);
     this.uniforms.daylight.value = daylight;
 
     // Sun direction on the tilted path, and the light used for shadows (sun by day, moon by night).
@@ -292,12 +314,18 @@ export class Renderer {
       const k = THREE.MathUtils.smoothstep(-sunY, 0.04, 0.2) * 0.22;
       u.lightColor.value.setRGB(0.55, 0.65, 1.0).multiplyScalar(k);
     }
+    u.lightColor.value.multiplyScalar(1 - rain * 0.85);
     u.ambientColor.value.setRGB(0.06 + 0.26 * day, 0.07 + 0.31 * day, 0.13 + 0.4 * day);
-    if (glow > 0) u.ambientColor.value.lerp(new THREE.Color(0.55, 0.42, 0.4), glow * 0.4);
+    if (glow > 0) u.ambientColor.value.lerp(new THREE.Color(0.55, 0.42, 0.4), glow * 0.4 * (1 - rain));
+    u.ambientColor.value.multiplyScalar((1 - rain * 0.3) * (1 - thunder * 0.35));
+    if (flash > 0) u.ambientColor.value.lerp(new THREE.Color(0.9, 0.92, 1), flash * 0.8);
     this.skyUniforms.glow.value = glow;
     this.skyUniforms.glowColor.value.setRGB(1.0, 0.55 + 0.35 * day * (1 - glow), 0.3 + 0.5 * day * (1 - glow));
     if (sunY < -0.1) this.skyUniforms.glowColor.value.setRGB(0.1, 0.12, 0.2);
     this.sunMat.color.setScalar(this.quality === 'off' ? 1 : 2.6);
+    this.sunMat.opacity = 1 - rain;
+    this.moon.material.opacity = 1 - rain;
+    this.starMat.opacity *= 1 - rain;
     const far = renderDistance * 16;
     if (underwater) {
       const c = new THREE.Color(0.08, 0.2, 0.55).multiplyScalar(0.3 + 0.7 * daylight);
@@ -328,8 +356,9 @@ export class Renderer {
     u.skyHorizon.value.copy(horizon);
     this.underwater = underwater;
     this.dayFactor = day;
-    this.cloudMat.color.setScalar(0.25 + 0.75 * day);
-    if (glow > 0 && sunY > -0.1) this.cloudMat.color.lerp(new THREE.Color(1.0, 0.6, 0.45), glow * 0.7);
+    this.cloudMat.color.setScalar((0.25 + 0.75 * day) * (1 - rain * 0.45) * (1 - thunder * 0.4));
+    if (glow > 0 && sunY > -0.1) this.cloudMat.color.lerp(new THREE.Color(1.0, 0.6, 0.45), glow * 0.7 * (1 - rain));
+    this.cloudMat.opacity = 0.8 + rain * 0.15;
     this.clouds.visible = !underwater && !inLava;
     return daylight;
   }

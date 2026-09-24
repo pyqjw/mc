@@ -106,6 +106,19 @@ export class Particles {
     this.add({ mesh, vel: new THREE.Vector3(), life: 0.25, maxLife: 0.3, gravity: 0, ownMat: true, ownGeo: true, fade: true, keepRotation: true });
   }
 
+  // A tiny splash where a raindrop lands.
+  splash(x, y, z) {
+    for (let i = 0; i < 2; i++) {
+      const mat = this.smokeMat.clone();
+      mat.color.setRGB(0.55, 0.65, 0.85);
+      const mesh = new THREE.Mesh(this.plane, mat);
+      mesh.scale.setScalar(0.05 + Math.random() * 0.03);
+      mesh.position.set(x, y + 0.02, z);
+      const vel = new THREE.Vector3((Math.random() - 0.5) * 1.2, 1 + Math.random() * 1.2, (Math.random() - 0.5) * 1.2);
+      this.add({ mesh, vel, life: 0.25 + Math.random() * 0.15, maxLife: 0.4, gravity: 12, ownMat: true, fade: true });
+    }
+  }
+
   poof(x, y, z) {
     this.smoke(x, y, z, 14, 0xeeeeee, 0.35, 2, 0.8);
   }

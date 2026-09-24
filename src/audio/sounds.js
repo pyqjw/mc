@@ -598,6 +598,68 @@ function chestSound(sr, rand, open) {
   return finish(highpass(o, sr, 60), sr, 0.8);
 }
 
+// ------------------------------------------------------------------ weather
+function rainLoop(sr, rand) {
+  const render = () => {
+    const d = 8;
+    const o = buf(sr, d + 1);
+    const pink = new Pink(rand);
+    const hp = new Biquad('highpass', 700, 0.6, sr);
+    const lp = new Biquad('lowpass', 7000, 0.6, sr);
+    for (let i = 0; i < o.length; i++) {
+      const t = i / sr;
+      o[i] = lp.tick(hp.tick(pink.next())) * (0.75 + 0.15 * Math.sin(TAU * t / 3.1) + 0.1 * Math.sin(TAU * t / 1.7));
+    }
+    // Individual drops pattering nearby.
+    for (let i = 0; i < 900; i++) {
+      const t = rand() * d;
+      grain(o, sr, t, rr(rand, 0.002, 0.006), rr(rand, 2500, 8000), rr(rand, 1.5, 4), rr(rand, 0.05, 0.3), rand);
+    }
+    return finish(makeLoop(o, sr, 1), sr, 0.7);
+  };
+  return [render(), render()];
+}
+
+function thunder(sr, rand) {
+  const d = rr(rand, 4, 6.5);
+  const o = buf(sr, d);
+  const brown = new Brown(rand);
+  const lp = new Biquad('lowpass', 400, 0.7, sr);
+  // A few rolling swells.
+  const swells = [];
+  let t = 0;
+  while (t < d * 0.8) {
+    swells.push([t, rr(rand, 0.4, 1.4), rr(rand, 0.4, 1)]);
+    t += rr(rand, 0.3, 1.2);
+  }
+  for (let i = 0; i < o.length; i++) {
+    const tt = i / sr;
+    if ((i & 63) === 0) lp.set(260 + 900 * Math.exp(-tt * 1.5), 0.7);
+    let env = 0;
+    for (const [s0, len, a] of swells) {
+      if (tt >= s0 && tt < s0 + len * 3) env += a * Math.min(1, (tt - s0) / 0.08) * Math.exp(-(tt - s0) / len);
+    }
+    o[i] = lp.tick(brown.next() * 2) * env * Math.min(1, (d - tt) / 0.5);
+  }
+  for (let i = 0; i < 60; i++) {
+    const tt = (rand() ** 2) * 1.5;
+    grain(o, sr, tt, rr(rand, 0.005, 0.03), rr(rand, 300, 1500), 1, rr(rand, 0.1, 0.4) * Math.exp(-tt), rand, 'lowpass');
+  }
+  return finish(saturate(o, 1.4), sr, 0.95);
+}
+
+function lightningImpact(sr, rand) {
+  const o = buf(sr, 1.6);
+  noiseShape(o, sr, rand, { attack: 0.0005, decay: 0.03, type: 'highpass', freq: 1500, amp: 1.2 });
+  noiseShape(o, sr, rand, { attack: 0.001, decay: 0.25, type: 'lowpass', freq: 500, amp: 1.2, color: 'brown' });
+  ping(o, sr, 0, 55, 0.4, 1.2, 35, 0.002);
+  for (let i = 0; i < 90; i++) {
+    const t = (rand() ** 2.5) * 0.4;
+    grain(o, sr, t, rr(rand, 0.001, 0.006), rr(rand, 2000, 9000), rr(rand, 1, 4), rr(rand, 0.2, 0.8) * (1 - t * 2), rand);
+  }
+  return finish(saturate(o, 1.6), sr, 0.95);
+}
+
 // ------------------------------------------------------------------ ambience
 
 function windLoop(sr, rand) {
@@ -819,6 +881,10 @@ def('gate.open', (sr, r) => gateSound(sr, r, true), { gain: 0.6, variants: 2 });
 def('gate.close', (sr, r) => gateSound(sr, r, false), { gain: 0.6, variants: 2 });
 def('chest.open', (sr, r) => chestSound(sr, r, true), { gain: 0.6, variants: 2 });
 def('chest.close', (sr, r) => chestSound(sr, r, false), { gain: 0.65, variants: 2 });
+
+def('thunder', thunder, { gain: 1.2, variants: 3, pitch: [0.8, 1.05] });
+def('lightning.impact', lightningImpact, { gain: 1.1, variants: 2, range: 64, pitch: [0.8, 1.1] });
+def('amb.rain', rainLoop, { bus: 'ambient', variants: 1, loop: true, pitch: [1, 1] });
 
 def('amb.wind', windLoop, { bus: 'ambient', variants: 1, loop: true, pitch: [1, 1] });
 def('amb.underwater', underwaterLoop, { bus: 'ambient', variants: 1, loop: true, pitch: [1, 1] });

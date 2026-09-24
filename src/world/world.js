@@ -550,6 +550,7 @@ export class World {
           if (id === 0 || id === B.STONE) continue;
           this.randomTick(cx * 16 + lx, y, cz * 16 + lz, id);
         }
+        if (r() < 1 / 16) this.precipitationTick(cx * 16 + ((r() * 16) | 0), cz * 16 + ((r() * 16) | 0));
       }
     }
   }
@@ -595,11 +596,19 @@ export class World {
         for (let dz = -4; dz <= 4 && !wet; dz++) for (let dx = -4; dx <= 4 && !wet; dx++) for (let dy = 0; dy <= 1; dy++) {
           if (this.getBlock(x + dx, y + dy, z + dz) === B.WATER) { wet = 1; break; }
         }
+        const weather = this.game && this.game.weather;
+        if (!wet && weather && weather.rain > 0.5 && this.getSkyLight(x, y + 1, z) >= 15) wet = 1;
         const m = this.getMeta(x, y, z);
         if (wet !== (m & 1)) this.setMeta(x, y, z, wet);
         else if (!wet && this.getBlock(x, y + 1, z) !== B.WHEAT && r() < 0.1) this.setBlock(x, y, z, B.DIRT);
         break;
       }
+      case B.SNOW:
+        if (this.getBlockLight(x, y, z) > 11) this.setBlock(x, y, z, B.AIR);
+        break;
+      case B.ICE:
+        if (this.getBlockLight(x, y + 1, z) > 11 || this.getBlockLight(x, y - 1, z) > 11) this.setBlock(x, y, z, B.WATER);
+        break;
       case B.SUGAR_CANE:
         if (this.getBlock(x, y + 1, z) === 0 && r() < 0.06) {
           let h = 1;
@@ -615,6 +624,27 @@ export class World {
         }
         break;
       default:
+    }
+  }
+
+  // Weather at the top of a column: water freezes and snow settles in cold places; rain waters farmland.
+  precipitationTick(x, z) {
+    const top = this.heightAt(x, z);
+    if (top < 1 || top >= H - 1) return;
+    const id = this.getBlock(x, top, z);
+    const cold = top > 100 || this.generator.column(x, z).temp < -0.35;
+    if (cold && id === B.WATER && this.getMeta(x, top, z) === 0 && this.getBlockLight(x, top + 1, z) < 10) {
+      this.setBlock(x, top, z, B.ICE);
+      return;
+    }
+    const weather = this.game && this.game.weather;
+    if (!weather || weather.rain < 0.5) return;
+    if (cold) {
+      if (id !== B.SNOW && id !== B.ICE && IS_SOLID[id] && this.getBlock(x, top + 1, z) === 0 && this.getBlockLight(x, top + 1, z) < 10) {
+        this.setBlock(x, top + 1, z, B.SNOW);
+      }
+    } else if (id === B.FARMLAND && !(this.getMeta(x, top, z) & 1)) {
+      this.setMeta(x, top, z, 1);
     }
   }
 
@@ -962,6 +992,23 @@ export class World {
       }
     }
     return done / total;
+  }
+
+  // Highest non-air block at (x, z) from a per-chunk height map (rain, lightning); -1 if unloaded.
+  heightAt(x, z) {
+    const c = this.chunkAt(x, z);
+    if (!c) return -1;
+    if (!c.heightmap || c.heightmapVersion !== c.version) {
+      if (!c.heightmap) c.heightmap = new Int16Array(256);
+      const b = c.blocks;
+      for (let i = 0; i < 256; i++) {
+        let y = H - 1;
+        while (y > 0 && b[i | (y << 8)] === 0) y--;
+        c.heightmap[i] = y;
+      }
+      c.heightmapVersion = c.version;
+    }
+    return c.heightmap[(x & 15) | ((z & 15) << 4)];
   }
 
   // Top-most non-air block at (x, z), or -1.

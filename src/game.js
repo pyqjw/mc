@@ -11,6 +11,8 @@ import { MobManager } from './entity/mobs.js';
 import { DropManager } from './entity/drops.js';
 import { XpOrbManager } from './entity/xporbs.js';
 import { ProjectileManager } from './entity/projectiles.js';
+import { Weather } from './world/weather.js';
+import { WeatherFx } from './render/weatherFx.js';
 import { Particles } from './entity/particles.js';
 import { Hand } from './render/hand.js';
 import { HUD } from './ui/hud.js';
@@ -24,6 +26,7 @@ const ENTITY_REACH = 3;
 
 const DEATH_MESSAGES = {
   arrow: '被骷髅射杀了',
+  lightning: '被闪电击中了',
   poison: '中毒身亡',
   fall: '从高处摔了下来',
   lava: '试图在熔岩里游泳',
@@ -84,6 +87,9 @@ export class Game {
     this.screens = new Screens(this);
 
     this.time = meta.time ?? 1000;
+    this.weather = new Weather(meta.weather);
+    this.weatherFx = new WeatherFx(this.renderer.scene);
+    this.lightningTimer = 200;
     if (!meta.spawn) meta.spawn = this.world.generator.findSpawn();
     if (meta.player) {
       this.player.load(meta.player);
@@ -198,8 +204,10 @@ export class Game {
 
     const dayTime = this.time % 24000;
     const eyeFluid = player.eyeFluid;
-    this.daylight = this.renderer.updateSky(dayTime, this.world.renderDistance, eyeFluid === B.WATER, eyeFluid === B.LAVA);
+    this.daylight = this.renderer.updateSky(dayTime, this.world.renderDistance, eyeFluid === B.WATER, eyeFluid === B.LAVA, this.weather);
     this.renderer.updateFollow(cam.position, this.time);
+    this.weatherFx.update(dt, cam.position, this.world, this.weather, this.daylight, now / 1000);
+    this.rainSplashes(dt);
     this.updateAudio(dt);
 
     // Held item.
@@ -219,6 +227,8 @@ export class Game {
 
   tick() {
     if (!this.sleeping) this.time++;
+    this.weather.tick();
+    this.tickLightning();
     const day = this.daylight;
     this.world.skyDarken = Math.round((1 - (day - 0.25) / 0.75) * 11);
     this.world.tick(this.player.pos.x, this.player.pos.z);
@@ -651,7 +661,7 @@ export class Game {
     const player = this.player;
     player.spawn = { x: hit.x + 0.5, y: hit.y + 1, z: hit.z + 0.5 };
     const t = this.time % 24000;
-    if (t < 12542 || t > 23459) {
+    if ((t < 12542 || t > 23459) && !this.weather.storming) {
       this.hud.message('已设置重生点。你只能在夜间睡觉');
       return;
     }
@@ -670,7 +680,11 @@ export class Game {
       this.sleepTimer += dt;
       this.sleepFade = Math.min(1, this.sleepTimer / 2);
       if (this.sleepTimer > 2.5) {
-        this.time = (Math.floor(this.time / 24000) + 1) * 24000;
+        const t = this.time % 24000;
+        if (t >= 12542 && t <= 23459) this.time = (Math.floor(this.time / 24000) + 1) * 24000;
+        this.weather.clear();
+        this.weather.rain = 0;
+        this.weather.thunder = 0;
         this.sleeping = false;
       }
     } else if (this.sleepFade > 0) {
@@ -930,14 +944,66 @@ export class Game {
         nearWater: prev.nearWater * 0.5 + Math.min(1, water / 12) * 0.5,
         nearLava: prev.nearLava * 0.5 + Math.min(1, lava / 8) * 0.5,
         birds: biome !== BIOMES.DESERT && biome !== BIOMES.OCEAN && biome !== BIOMES.SNOWY && biome !== BIOMES.BEACH,
+        snowy: this.weatherFx.snowy(w, hx, hz, hy),
       };
     }
     this.audio.setEnvironment({
       ...this.env,
+      rain: this.weather.rain * (this.env.snowy ? 0 : 1),
       underwater: this.player.eyeFluid === B.WATER,
       day: (this.daylight - 0.25) / 0.75,
       paused: this.paused,
     });
+  }
+
+  // ------------------------------------------------------------------ weather
+  tickLightning() {
+    if (!this.weather.storming || this.player.dead) return;
+    if (--this.lightningTimer > 0) return;
+    this.lightningTimer = 100 + Math.floor(Math.random() * 300);
+    const p = this.player.pos;
+    const a = Math.random() * Math.PI * 2;
+    const d = 10 + Math.random() * 60;
+    const x = Math.floor(p.x + Math.cos(a) * d);
+    const z = Math.floor(p.z + Math.sin(a) * d);
+    const top = this.world.heightAt(x, z);
+    if (top < 0) return;
+    this.strikeLightning(x + 0.5, top + 1, z + 0.5);
+  }
+
+  strikeLightning(x, y, z) {
+    this.weatherFx.bolt(x, y, z);
+    this.renderer.flash = 1;
+    const p = this.player.pos;
+    const dist = Math.hypot(p.x - x, p.y - y, p.z - z);
+    // Thunder arrives after the flash (sound travels ~340 blocks a second).
+    setTimeout(() => this.sound('thunder', undefined, undefined, undefined, Math.max(0.25, 1 - dist / 160)), Math.min(2000, (dist / 340) * 1000));
+    if (dist < 48) this.sound('lightning.impact', x, y, z);
+    for (const e of [this.player, ...this.mobs.mobs]) {
+      if (e.dead || Math.hypot(e.pos.x - x, e.pos.y - y, e.pos.z - z) > 3.5) continue;
+      if (e === this.player) {
+        e.invulnerable = 0;
+        e.damage(5, 'lightning');
+      } else {
+        e.hurtTime = 0;
+        e.damage(5, null);
+      }
+    }
+  }
+
+  // Little splashes where rain hits the ground near the player.
+  rainSplashes(dt) {
+    const w = this.weather;
+    if (w.rain < 0.2 || this.paused) return;
+    const cam = this.renderer.camera.position;
+    const n = Math.floor(w.rain * 30 * dt + Math.random());
+    for (let i = 0; i < n; i++) {
+      const x = Math.floor(cam.x + (Math.random() - 0.5) * 16);
+      const z = Math.floor(cam.z + (Math.random() - 0.5) * 16);
+      const top = this.world.heightAt(x, z);
+      if (top < 0 || top > cam.y + 8 || this.weatherFx.snowy(this.world, x, z, top)) continue;
+      this.particles.splash(x + Math.random(), top + 1, z + Math.random());
+    }
   }
 
   // Moves the player up out of solid blocks (after spawning in a fresh chunk). For a brand new
@@ -1050,6 +1116,7 @@ export class Game {
     if (!this.world) return;
     const meta = this.meta;
     meta.time = this.time;
+    meta.weather = this.weather.toJSON();
     meta.player = this.player.toJSON();
     meta.lastPlayed = Date.now();
     try {
@@ -1073,6 +1140,7 @@ export class Game {
     this.drops.clear();
     this.xpOrbs.clear();
     this.projectiles.clear();
+    this.weatherFx.dispose();
     this.particles.clear();
     this.world.dispose();
     this.screens.destroy();
@@ -1109,6 +1177,7 @@ export class Game {
       `生物群系: ${BIOME_NAMES[col.biome]}`,
       `第 ${day} 天 ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
       `种子: ${this.meta.seed}`,
+      `天气: ${this.weather.storming ? '雷雨' : this.weather.rain > 0.5 ? '下雨' : '晴朗'}`,
     ];
     const gl = this.renderer.renderer.getContext();
     const right = [

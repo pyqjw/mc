@@ -223,17 +223,19 @@ export class Audio {
     this.setLoopGain('amb.wind', wind);
     this.setLoopGain('amb.underwater', under ? 0.45 : 0);
     this.setLoopGain('amb.water', active && !under ? env.nearWater * 0.35 : 0);
+    // Rain is loud outside and a muffled patter under a roof.
+    this.setLoopGain('amb.rain', active && !under ? (env.rain || 0) * (0.12 + env.outdoors * 0.3) : 0);
     if (!active) return;
 
     const tm = this.timers;
     for (const k of Object.keys(tm)) tm[k] -= dt;
     if (tm.bird <= 0) {
       tm.bird = 2 + Math.random() * 7;
-      if (env.day > 0.75 && env.outdoors > 0.6 && env.birds && !under) this.around('amb.bird', 6, 22, 8, 1);
+      if (env.day > 0.75 && env.outdoors > 0.6 && env.birds && !under && !(env.rain > 0.2)) this.around('amb.bird', 6, 22, 8, 1);
     }
     if (tm.cricket <= 0) {
       tm.cricket = 1 + Math.random() * 4;
-      if (env.day < 0.45 && env.outdoors > 0.5 && !under) this.around('amb.cricket', 5, 18, 2, 1);
+      if (env.day < 0.45 && env.outdoors > 0.5 && !under && !(env.rain > 0.2)) this.around('amb.cricket', 5, 18, 2, 1);
     }
     if (tm.cave <= 0) {
       tm.cave = 50 + Math.random() * 130;
