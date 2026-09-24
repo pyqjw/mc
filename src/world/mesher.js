@@ -6,8 +6,9 @@ import { CHUNK_SIZE, WORLD_HEIGHT, CHUNK_VOLUME, blockIndex } from '../constants
 import {
   IS_OPAQUE, LIGHT_ATTEN, LIGHT_EMIT, RENDER_TYPE, RENDER_LAYER, CULL_SELF, IS_FLUID,
   TEX_TOP, TEX_BOTTOM, TEX_SIDE, TEX_FRONT, IS_ORIENTABLE, RENDER, LAYER, ATLAS_TILES_PER_ROW, TILE_INDEX, B,
-  fluidHeight, BLOCKS, TINT_TYPE, TINT,
+  fluidHeight, BLOCKS, TINT_TYPE, TINT, NEIGHBOR_LIGHT,
 } from './blocks.js';
+import { shapeBoxes, boxTextures, DIRS } from './shapes.js';
 
 const H = WORLD_HEIGHT;
 const PAD = 16;
@@ -144,6 +145,28 @@ function computeLight() {
     }
   }
   propagate(blk, 0, tail);
+
+  // Slabs and stairs block light but show the brightest light next to them.
+  for (let i = 0; i < RN; i++) {
+    if (!NEIGHBOR_LIGHT[rBlocks[i]]) continue;
+    const x = i % RS;
+    const z = ((i / RS) | 0) % RS;
+    const y = (i / RA) | 0;
+    let s = 0;
+    let b = 0;
+    const take = (j) => {
+      if (sky[j] > s) s = sky[j];
+      if (blk[j] > b) b = blk[j];
+    };
+    if (y < H - 1) take(i + RA); else s = 15;
+    if (y > 0) take(i - RA);
+    if (x > 0) take(i - 1);
+    if (x < RS - 1) take(i + 1);
+    if (z > 0) take(i - RS);
+    if (z < RS - 1) take(i + RS);
+    sky[i] = s;
+    blk[i] = b;
+  }
 }
 
 class GeometryBuilder {
@@ -398,7 +421,10 @@ function emitCross(g, id, meta, x, y, z, lx, lz) {
   }
 }
 
-function emitTorch(g, id, x, y, z, lx, lz) {
+const TORCH_TILT = Math.PI / 8;
+
+// Standing torch, or one leaning out from a wall (meta 1..4 = direction + 1, away from the wall).
+function emitTorch(g, id, meta, x, y, z, lx, lz) {
   const i = ri(x, y, z);
   const s = sky[i] * 17;
   const b = blk[i] * 17;
@@ -406,6 +432,22 @@ function emitTorch(g, id, x, y, z, lx, lz) {
   const x0 = 7 / 16;
   const x1 = 9 / 16;
   const top = 10 / 16;
+  const wall = meta >= 1 && meta <= 4;
+  const d = wall ? DIRS[meta - 1] : null;
+  const cs = Math.cos(TORCH_TILT);
+  const sn = Math.sin(TORCH_TILT);
+  const place = (px, py, pz) => {
+    if (!wall) return [px, py, pz];
+    // Relative to the bottom centre of the stick, tilt the top away from the wall.
+    const rx = px - 0.5;
+    const rz = pz - 0.5;
+    const along = rx * d[0] + rz * d[1];
+    const sx = rx - along * d[0];
+    const sz = rz - along * d[1];
+    const na = along * cs + py * sn;
+    const ny = -along * sn + py * cs;
+    return [0.5 - d[0] * 0.5 + sx + na * d[0], 3.5 / 16 + ny, 0.5 - d[1] * 0.5 + sz + na * d[1]];
+  };
   for (let f = 0; f < 6; f++) {
     if (f === 3) continue;
     const face = FACES[f];
@@ -425,9 +467,65 @@ function emitTorch(g, id, x, y, z, lx, lz) {
         fv = FACE_UV[v][1] ? top : 0;
       }
       const [u, vv] = tileUV(tile, fu, fv);
-      g.vertex(lx + px, y + py, lz + pz, u, vv, s, b, Math.round(face.shade * 255));
+      const [qx, qy, qz] = place(px, py, pz);
+      g.vertex(lx + qx, y + qy, lz + qz, u, vv, s, b, Math.round(face.shade * 255));
     }
     g.quad(false);
+  }
+}
+
+// Texture coordinates of a point on face f of a block, as Minecraft maps block textures.
+function faceUV(f, px, py, pz) {
+  switch (f) {
+    case 0: return [1 - pz, py];
+    case 1: return [pz, py];
+    case 2: return [px, 1 - pz];
+    case 3: return [px, pz];
+    case 4: return [px, py];
+    default: return [1 - px, py];
+  }
+}
+
+const BOX_EDGE = [(b) => b[3] >= 1, (b) => b[0] <= 0, (b) => b[4] >= 1, (b) => b[1] <= 0, (b) => b[5] >= 1, (b) => b[2] <= 0];
+
+// Blocks made of boxes (see shapes.js), with textures cropped to each box like Minecraft models.
+function emitShape(g, id, meta, x, y, z, lx, lz) {
+  const nb = (dx, dz) => {
+    const j = ri(x + dx, y, z + dz);
+    return [rBlocks[j], rMeta[j]];
+  };
+  const boxes = shapeBoxes(id, meta, 'render', nb);
+  for (let bi = 0; bi < boxes.length; bi++) {
+    const box = boxes[bi];
+    const tex = boxTextures(id, meta, bi);
+    for (let f = 0; f < 6; f++) {
+      const tile = tex.tiles[f];
+      if (tile < 0) continue;
+      const face = FACES[f];
+      const [nx, ny, nz] = face.n;
+      const fy = y + ny;
+      const edge = BOX_EDGE[f](box);
+      let nid = 0;
+      if (fy >= 0 && fy < H) nid = rBlocks[ri(x + nx, fy, z + nz)];
+      else if (fy < 0) nid = 1;
+      if (edge && IS_OPAQUE[nid]) continue;
+      const li = fy >= 0 && fy < H ? ri(x + nx, fy, z + nz) : -1;
+      const ls = li < 0 ? 15 : sky[li];
+      const lb = li < 0 ? 0 : blk[li];
+      g.ensure(4);
+      for (let v = 0; v < 4; v++) {
+        const c = face.c[v];
+        const px = c[0] ? box[3] : box[0];
+        const py = c[1] ? box[4] : box[1];
+        const pz = c[2] ? box[5] : box[2];
+        let [u, vv] = faceUV(f, Math.min(1, Math.max(0, px)), Math.min(1, Math.max(0, py)), Math.min(1, Math.max(0, pz)));
+        if (tex.flipU[f]) u = 1 - u;
+        for (let k = 0; k < tex.rot[f]; k++) [u, vv] = [1 - vv, u];
+        const [tu, tv] = tileUV(tile, u, vv);
+        g.vertex(lx + px, y + py, lz + pz, tu, tv, ls * 17, lb * 17, Math.round(face.shade * 255));
+      }
+      g.quad(false);
+    }
   }
 }
 
@@ -476,7 +574,8 @@ export function buildChunkMesh(chunks, tints = null) {
           case RENDER.BED: emitCube(g, id, rMeta[i], x, y, z, lx, lz, BLOCK_HEIGHT[id]); break;
           case RENDER.LIQUID: emitLiquid(g, id, rMeta[i], x, y, z, lx, lz); break;
           case RENDER.CROSS: emitCross(g, id, rMeta[i], x, y, z, lx, lz); break;
-          case RENDER.TORCH: emitTorch(g, id, x, y, z, lx, lz); break;
+          case RENDER.TORCH: emitTorch(g, id, rMeta[i], x, y, z, lx, lz); break;
+          case RENDER.SHAPE: emitShape(g, id, rMeta[i], x, y, z, lx, lz); break;
           default: break;
         }
       }

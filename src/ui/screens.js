@@ -203,6 +203,10 @@ export class Screens {
 
   close() {
     if (!this.current) return;
+    if (this.current.kind === 'chest' && this.current.data.pos) {
+      const [x, y, z] = this.current.data.pos;
+      this.game.sound('chest.close', x + 0.5, y + 0.5, z + 0.5);
+    }
     // Return crafting grid and cursor items to the inventory (or drop them).
     const giveBack = (s) => {
       if (!s) return;

@@ -1,17 +1,37 @@
 // Voxel ray casting (Amanatides & Woo) with per-block selection boxes.
 import { BLOCKS, RENDER, IS_FLUID, IS_SOLID, B } from './blocks.js';
+import { SHAPE_OF, shapeBoxes, selectionBox } from './shapes.js';
 
-// Selection / hit box of a block in local block coordinates.
-export function blockBox(id, meta) {
+// Selection box of a torch: standing, or on a wall (meta 1..4 = direction away from the wall + 1).
+function torchBox(meta) {
+  const p = (v) => v / 16;
+  switch (meta) {
+    case 1: return [p(5.5), p(3), p(11), p(10.5), p(13), 1]; // north: wall to the south
+    case 2: return [0, p(3), p(5.5), p(5), p(13), p(10.5)]; // east: wall to the west
+    case 3: return [p(5.5), p(3), 0, p(10.5), p(13), p(5)]; // south
+    case 4: return [p(11), p(3), p(5.5), 1, p(13), p(10.5)]; // west
+    default: return [p(6), 0, p(6), p(10), p(10), p(10)];
+  }
+}
+
+// Selection / hit boxes of a block in local block coordinates. `nb(dx, dz)` gives neighbours.
+export function selectBoxes(id, meta, nb = null) {
   const b = BLOCKS[id];
+  if (SHAPE_OF[id]) return shapeBoxes(id, meta, 'select', nb);
   switch (b.render) {
     case RENDER.CROSS:
-      if (id === B.WHEAT) return [0, 0, 0, 1, Math.max(2, (meta + 1) * 2) / 16, 1];
-      return [0.15, 0, 0.15, 0.85, 0.8, 0.85];
-    case RENDER.TORCH: return [0.375, 0, 0.375, 0.625, 0.625, 0.625];
-    case RENDER.BED: return [0, 0, 0, 1, b.height, 1];
-    default: return [0, 0, 0, 1, 1, 1];
+      if (id === B.WHEAT) return [[0, 0, 0, 1, Math.max(2, (meta + 1) * 2) / 16, 1]];
+      return [[0.15, 0, 0.15, 0.85, 0.8, 0.85]];
+    case RENDER.TORCH: return [torchBox(meta)];
+    case RENDER.BED: return [[0, 0, 0, 1, b.height, 1]];
+    default: return [[0, 0, 0, 1, 1, 1]];
   }
+}
+
+// Bounding selection box (for the highlight outline).
+export function blockBox(id, meta, nb = null) {
+  if (SHAPE_OF[id]) return selectionBox(id, meta, nb);
+  return selectBoxes(id, meta, nb)[0];
 }
 
 function rayBox(ox, oy, oz, dx, dy, dz, box) {
@@ -65,11 +85,20 @@ export function raycast(world, origin, dir, maxDist, opts = {}) {
       if (IS_FLUID[id]) hit = !!opts.fluids && meta === 0;
       else hit = !opts.solid || IS_SOLID[id] === 1;
       if (hit) {
-        const box = IS_FLUID[id] ? [0, 0, 0, 1, 1, 1] : blockBox(id, meta);
-        const r = rayBox(origin.x - x, origin.y - y, origin.z - z, dir.x, dir.y, dir.z, box);
-        if (r && r.t <= maxDist) {
-          const normal = r.face >= 0 ? FACE_NORMALS[r.face] : [0, 1, 0];
-          return { x, y, z, id, meta, normal, dist: r.t, box };
+        const bx = x;
+        const bz = z;
+        const by = y;
+        const nb = (dx, dz) => [world.getBlock(bx + dx, by, bz + dz), world.getMeta(bx + dx, by, bz + dz)];
+        const boxes = IS_FLUID[id] ? [[0, 0, 0, 1, 1, 1]] : selectBoxes(id, meta, nb);
+        let best = null;
+        for (const box of boxes) {
+          const r = rayBox(origin.x - x, origin.y - y, origin.z - z, dir.x, dir.y, dir.z, box);
+          if (r && r.t <= maxDist && (!best || r.t < best.t)) best = r;
+        }
+        if (best) {
+          const normal = best.face >= 0 ? FACE_NORMALS[best.face] : [0, 1, 0];
+          const box = IS_FLUID[id] ? [0, 0, 0, 1, 1, 1] : blockBox(id, meta, nb);
+          return { x, y, z, id, meta, normal, dist: best.t, box };
         }
       }
     }

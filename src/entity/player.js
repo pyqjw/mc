@@ -1,6 +1,6 @@
 // The player: movement physics (walking, sprinting, sneaking, swimming) and survival stats.
 import * as THREE from 'three';
-import { moveEntity, hasGroundBelow, fluidSubmersion, pointInFluid, touchingBlocks } from './physics.js';
+import { moveEntity, hasGroundBelow, fluidSubmersion, pointInFluid, touchingBlocks, onClimbable } from './physics.js';
 import { B } from '../world/blocks.js';
 import { Inventory, cloneStack } from '../inventory.js';
 import { getItem } from '../items.js';
@@ -146,6 +146,17 @@ export class Player {
       this.vel.y *= Math.pow(0.98, dt * 20);
       if (this.vel.y < -78) this.vel.y = -78;
     }
+    // Ladders: slow descent, hold still while sneaking, climb when pushing into them or jumping.
+    this.climbing = !fluid && onClimbable(world, this);
+    if (this.climbing) {
+      const lim = 3;
+      this.vel.x = Math.max(-lim, Math.min(lim, this.vel.x));
+      this.vel.z = Math.max(-lim, Math.min(lim, this.vel.z));
+      if (this.vel.y < -lim) this.vel.y = -lim;
+      if (mv.sneak && this.vel.y < 0) this.vel.y = 0;
+      if (this.hitH || mv.jump) this.vel.y = 2.4;
+      this.fallDistance = 0;
+    }
 
     let dx = this.vel.x * dt;
     const dy = this.vel.y * dt;
@@ -168,7 +179,7 @@ export class Player {
 
     // Fall damage.
     if (!this.onGround && this.pos.y < oldY) this.fallDistance += oldY - this.pos.y;
-    if (fluid) this.fallDistance = 0;
+    if (fluid || this.climbing) this.fallDistance = 0;
     if (this.onGround && !wasOnGround) {
       if (this.fallDistance > 3) {
         const dmg = Math.ceil(this.fallDistance - 3);

@@ -1,15 +1,23 @@
 // AABB-vs-voxel collision shared by the player, mobs and dropped items.
 import { BLOCKS, IS_SOLID, IS_FLUID, fluidHeight } from '../world/blocks.js';
+import { SHAPE_OF, shapeBoxes } from '../world/shapes.js';
 
 const BLOCK_TOP = new Float32Array(256).fill(1);
 for (const b of BLOCKS) if (b) BLOCK_TOP[b.id] = b.height;
 
 const EPS = 1e-7;
 
-function solidAt(world, x, y, z) {
+// Calls cb(x0, y0, z0, x1, y1, z1) for every collision box of the block at (x, y, z).
+export function forEachCollisionBox(world, x, y, z, cb) {
   const id = world.getBlock(x, y, z);
-  if (id < 0) return 1; // unloaded chunks and the void floor act as walls
-  return IS_SOLID[id] ? BLOCK_TOP[id] : 0;
+  if (id < 0) { cb(x, y, z, x + 1, y + 1, z + 1); return; } // unloaded chunks and the void floor act as walls
+  if (!IS_SOLID[id]) return;
+  if (SHAPE_OF[id]) {
+    const nb = (dx, dz) => [world.getBlock(x + dx, y, z + dz), world.getMeta(x + dx, y, z + dz)];
+    for (const b of shapeBoxes(id, world.getMeta(x, y, z), 'collision', nb)) cb(x + b[0], y + b[1], z + b[2], x + b[3], y + b[4], z + b[5]);
+    return;
+  }
+  cb(x, y, z, x + 1, y + BLOCK_TOP[id], z + 1);
 }
 
 // Box: [minX, minY, minZ, maxX, maxY, maxZ]
@@ -21,22 +29,21 @@ function sweep(world, box, axis, d) {
   const x0 = Math.floor(lo[0]); const x1 = Math.floor(hi[0] - EPS);
   const y0 = Math.floor(lo[1]) - 1; const y1 = Math.floor(hi[1] - EPS);
   const z0 = Math.floor(lo[2]); const z1 = Math.floor(hi[2] - EPS);
+  const cmin = [0, 0, 0];
+  const cmax = [0, 0, 0];
+  const test = (ax, ay, az, bx, by, bz) => {
+    cmin[0] = ax; cmin[1] = ay; cmin[2] = az;
+    cmax[0] = bx; cmax[1] = by; cmax[2] = bz;
+    for (let a = 0; a < 3; a++) {
+      if (a === axis) continue;
+      if (box[a + 3] <= cmin[a] + EPS || box[a] >= cmax[a] - EPS) return;
+    }
+    if (d > 0 && box[axis + 3] <= cmin[axis] + EPS) d = Math.min(d, cmin[axis] - box[axis + 3]);
+    else if (d < 0 && box[axis] >= cmax[axis] - EPS) d = Math.max(d, cmax[axis] - box[axis]);
+  };
   for (let y = y0; y <= y1; y++) {
     for (let z = z0; z <= z1; z++) {
-      for (let x = x0; x <= x1; x++) {
-        const top = solidAt(world, x, y, z);
-        if (top === 0) continue;
-        const cmin = [x, y, z];
-        const cmax = [x + 1, y + top, z + 1];
-        let overlap = true;
-        for (let a = 0; a < 3; a++) {
-          if (a === axis) continue;
-          if (box[a + 3] <= cmin[a] + EPS || box[a] >= cmax[a] - EPS) { overlap = false; break; }
-        }
-        if (!overlap) continue;
-        if (d > 0 && box[axis + 3] <= cmin[axis] + EPS) d = Math.min(d, cmin[axis] - box[axis + 3]);
-        else if (d < 0 && box[axis] >= cmax[axis] - EPS) d = Math.max(d, cmax[axis] - box[axis]);
-      }
+      for (let x = x0; x <= x1; x++) forEachCollisionBox(world, x, y, z, test);
     }
   }
   return d;
@@ -129,6 +136,29 @@ export function pointInFluid(world, x, y, z) {
   const above = world.getBlock(bx, by + 1, bz);
   const surface = by + fluidHeight(world.getMeta(bx, by, bz), above === id);
   return y < surface ? id : 0;
+}
+
+// Is the point inside a block's collision boxes?
+export function pointInSolid(world, x, y, z) {
+  const bx = Math.floor(x);
+  const by = Math.floor(y);
+  const bz = Math.floor(z);
+  let inside = false;
+  forEachCollisionBox(world, bx, by, bz, (x0, y0, z0, x1, y1, z1) => {
+    if (x > x0 && x < x1 && y > y0 && y < y1 && z > z0 && z < z1) inside = true;
+  });
+  return inside;
+}
+
+// Is the entity in a climbable block (ladder)?
+export function onClimbable(world, e) {
+  const x = Math.floor(e.pos.x);
+  const z = Math.floor(e.pos.z);
+  for (const y of [Math.floor(e.pos.y), Math.floor(e.pos.y + 0.6)]) {
+    const id = world.getBlock(x, y, z);
+    if (id > 0 && BLOCKS[id].climbable) return true;
+  }
+  return false;
 }
 
 // Does the entity's box intersect any block with the given predicate?

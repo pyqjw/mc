@@ -311,6 +311,73 @@ const ANIMATED = [
   { tile: 'lava', paint: lavaFrame, frames: LAVA_FRAMES, fps: LAVA_FPS },
 ];
 
+
+function bedBlanket(p) {
+  p.fill((x, y) => {
+    if (x === 0 || x === 15) return [120, 18, 18];
+    return shade([168, 30, 30], (p.rand() - 0.5) * 14 + (y % 5 === 0 ? -10 : 0));
+  });
+}
+
+// Vertical faces of the bed: blanket over a wooden frame (only the lower 9 rows show).
+function bedSide(p, part) {
+  const wood = [140, 104, 60];
+  p.fill((x, y) => {
+    if (part === 'head_end') return y < 7 ? [0, 0, 0, 0] : shade(y === 7 ? [165, 128, 78] : wood, (p.rand() - 0.5) * 10);
+    if (y < 7) return [0, 0, 0, 0];
+    if (y <= 10) return part === 'head' && x < 5 ? shade([226, 226, 226], (p.rand() - 0.5) * 8) : shade([168, 30, 30], (p.rand() - 0.5) * 12);
+    if (y === 11) return [120, 18, 18];
+    return shade((x < 3 || x > 12) && y > 12 ? [110, 80, 45] : wood, (p.rand() - 0.5) * 10);
+  });
+}
+
+function doorPlanks(p) {
+  p.fill((x, y) => {
+    if (x === 0 || x === 15) return [104, 76, 40];
+    const seam = x % 5 === 0;
+    return shade(seam ? [140, 108, 62] : C.oakPlanks, (p.rand() - 0.5) * 10 + Math.sin(y * 0.7 + x) * 4);
+  });
+}
+
+function mushroom(p, cap, spots) {
+  p.fill(() => [0, 0, 0, 0]);
+  p.rect(7, 10, 8, 15, (x) => (x === 7 ? [226, 218, 200] : [196, 188, 170]));
+  for (let y = 5; y <= 10; y++) {
+    const w = y === 5 ? 2 : y === 6 ? 3 : 4;
+    for (let x = 8 - w; x < 8 + w; x++) {
+      if (y === 10 && (x < 5 || x > 10)) continue;
+      p.px(x, y, spots && (x + y * 3) % 5 === 0 && y < 9 ? spots : mul(cap, y === 10 ? 0.75 : 0.95 + p.rand() * 0.1));
+    }
+  }
+}
+
+function flower(p, kind, petal, centre) {
+  p.fill(() => [0, 0, 0, 0]);
+  const stem = [60, 130, 40];
+  p.line(7, 15, 7, kind === 'ball' ? 5 : 8, stem);
+  p.px(6, 12, [70, 150, 45]);
+  p.px(8, 13, [70, 150, 45]);
+  if (kind === 'tulip') {
+    p.rect(6, 4, 8, 7, (x, y) => (y === 4 && x === 7 ? null : x === 7 ? centre : petal));
+    p.px(5, 5, petal);
+    p.px(9, 5, petal);
+    p.line(5, 11, 8, 9, [70, 150, 45]);
+  } else if (kind === 'ball') {
+    for (let y = 1; y < 6; y++) for (let x = 5; x < 10; x++) if (Math.hypot(x - 7, y - 3) < 2.6) p.px(x, y, p.rand() < 0.3 ? centre : petal);
+  } else if (kind === 'cluster') {
+    for (const [x, y] of [[5, 6], [9, 5], [7, 4], [6, 8], [10, 8]]) {
+      p.px(x, y, centre);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) p.px(x + dx, y + dy, petal);
+    }
+  } else if (kind === 'daisy') {
+    for (let y = 3; y < 10; y++) for (let x = 4; x < 11; x++) if (Math.hypot(x - 7, y - 6) < 3.2) p.px(x, y, petal);
+    p.rect(6, 5, 8, 7, centre);
+  } else {
+    for (const [x, y] of [[7, 3], [5, 5], [9, 5], [6, 7], [8, 7], [7, 5], [7, 4], [6, 5], [8, 5], [7, 6]]) p.px(x, y, petal);
+    p.px(7, 5, centre);
+  }
+}
+
 // ---------- tile table ----------
 const PAINTERS = {
   stone: (p) => stone(p),
@@ -514,17 +581,6 @@ const PAINTERS = {
   iron_block: (p) => p.fill((x, y) => (x === 0 || y === 0 ? [255, 255, 255] : x === 15 || y === 15 ? [170, 170, 170] : shade([220, 220, 220], (p.rand() - 0.5) * 8))),
   gold_block: (p) => p.fill((x, y) => (x === 0 || y === 0 ? [255, 250, 160] : x === 15 || y === 15 ? [200, 150, 30] : shade([250, 210, 60], (p.rand() - 0.5) * 12))),
   diamond_block: (p) => p.fill((x, y) => (x === 0 || y === 0 ? [210, 255, 250] : x === 15 || y === 15 ? [40, 170, 165] : shade([100, 225, 220], (p.rand() - 0.5) * 12))),
-  bed_top: (p) => p.fill((x, y) => {
-    if (y < 6) return x === 0 || x === 15 || y === 0 ? [190, 190, 190] : shade([225, 225, 225], (p.rand() - 0.5) * 6);
-    return x === 0 || x === 15 ? [130, 20, 20] : shade([170, 30, 30], (p.rand() - 0.5) * 14);
-  }),
-  bed_side: (p) => p.fill((x, y) => {
-    if (y < 7) return [0, 0, 0, 0];
-    if (y < 11) return shade([170, 30, 30], (p.rand() - 0.5) * 14);
-    if (y < 13) return shade([150, 110, 65], (p.rand() - 0.5) * 10);
-    if (x < 3 || x > 12) return [120, 85, 50];
-    return [150, 110, 65];
-  }),
   oak_sapling: (p) => sapling(p, [60, 128, 38], [104, 82, 50], false),
   birch_sapling: (p) => sapling(p, [110, 155, 70], [216, 214, 206], false),
   spruce_sapling: (p) => sapling(p, [52, 92, 58], [60, 40, 20], true),
@@ -551,6 +607,116 @@ const PAINTERS = {
   },
   farmland: (p) => p.fill((x, y) => shade(y % 4 === 0 ? [85, 55, 30] : [110, 75, 45], (p.rand() - 0.5) * 14)),
   farmland_wet: (p) => p.fill((x, y) => shade(y % 4 === 0 ? [50, 30, 15] : [70, 45, 25], (p.rand() - 0.5) * 10)),
+
+  bed_head_top: (p) => {
+    bedBlanket(p);
+    p.rect(1, 1, 14, 6, () => shade([226, 226, 226], (p.rand() - 0.5) * 10));
+    p.rect(1, 1, 14, 1, [240, 240, 240]);
+    p.rect(1, 6, 14, 6, [190, 190, 190]);
+  },
+  bed_foot_top: (p) => {
+    bedBlanket(p);
+    p.rect(0, 0, 15, 0, [196, 40, 40]);
+  },
+  bed_head_end: (p) => bedSide(p, 'head_end'),
+  bed_foot_end: (p) => bedSide(p, 'foot_end'),
+  bed_side_head: (p) => bedSide(p, 'head'),
+  bed_side_foot: (p) => bedSide(p, 'foot'),
+  chest_latch: (p) => p.fill((x, y) => (x === 0 || y === 0 || x === 15 || y === 15 ? [60, 60, 60] : shade([196, 196, 196], (p.rand() - 0.5) * 20))),
+  oak_door_top: (p) => {
+    doorPlanks(p);
+    for (const [x0, x1] of [[3, 6], [9, 12]]) p.rect(x0, 3, x1, 9, [0, 0, 0, 0]);
+    p.rect(2, 2, 13, 2, [104, 76, 40]);
+    p.rect(2, 10, 13, 10, [104, 76, 40]);
+    p.rect(7, 3, 8, 9, [104, 76, 40]);
+    p.rect(2, 3, 2, 9, [104, 76, 40]);
+    p.rect(13, 3, 13, 9, [104, 76, 40]);
+  },
+  oak_door_bottom: (p) => {
+    doorPlanks(p);
+    p.rect(3, 3, 12, 12, (x, y) => (x === 3 || y === 3 ? [118, 88, 48] : x === 12 || y === 12 ? [175, 140, 88] : null));
+    p.rect(12, 0, 13, 1, [70, 70, 70]);
+    p.px(12, 2, [110, 110, 110]);
+  },
+  ladder: (p) => {
+    p.fill(() => [0, 0, 0, 0]);
+    const rail = (x) => { p.rect(x, 0, x, 15, [126, 96, 56]); p.rect(x + 1, 0, x + 1, 15, [98, 72, 40]); };
+    rail(2);
+    rail(12);
+    for (const y of [1, 5, 9, 13]) {
+      p.rect(2, y, 13, y, [140, 108, 64]);
+      p.rect(2, y + 1, 13, y + 1, [96, 70, 40]);
+    }
+  },
+  bookshelf: (p) => {
+    planks(p, C.oakPlanks);
+    const colours = [[150, 40, 40], [45, 70, 150], [60, 120, 50], [120, 80, 40], [110, 50, 120], [180, 150, 60], [40, 110, 110]];
+    for (const [y0, y1] of [[2, 6], [9, 13]]) {
+      p.rect(0, y0 - 1, 15, y1 + 1, [74, 54, 30]);
+      let x = 1;
+      while (x < 15) {
+        const w = 1 + Math.floor(p.rand() * 2);
+        const h = y0 + Math.floor(p.rand() * 2);
+        const c = colours[Math.floor(p.rand() * colours.length)];
+        p.rect(x, h, Math.min(14, x + w - 1), y1, (xx) => (xx === x ? mul(c, 1.2) : c));
+        x += w + (p.rand() < 0.25 ? 1 : 0);
+      }
+    }
+    p.rect(0, 0, 15, 0, [104, 78, 44]);
+    p.rect(0, 15, 15, 15, [104, 78, 44]);
+  },
+  sugar_cane: (p) => {
+    p.fill(() => [0, 0, 0, 0]);
+    for (const x0 of [2, 7, 11]) {
+      for (let y = 0; y < 16; y++) {
+        const joint = (y + x0) % 5 === 0;
+        p.px(x0, y, gray(joint ? 205 : 170));
+        p.px(x0 + 1, y, gray(joint ? 185 : 140));
+      }
+      p.px(x0 + 2, (x0 * 3) % 16, gray(150));
+      p.px(x0 - 1, (x0 * 5 + 3) % 16, gray(160));
+    }
+  },
+  fern: (p) => {
+    p.fill(() => [0, 0, 0, 0]);
+    for (const [cx, lean] of [[4, -1], [8, 0], [11, 1]]) {
+      for (let k = 0; k < 12; k++) {
+        const y = 15 - k;
+        const x = cx + Math.round(lean * k * 0.25);
+        p.px(x, y, gray(140));
+        if (k > 2 && k % 2 === 0) { p.px(x - 1, y, gray(170)); p.px(x + 1, y - 1, gray(160)); }
+      }
+    }
+  },
+  brown_mushroom: (p) => mushroom(p, [150, 110, 80], null),
+  red_mushroom: (p) => mushroom(p, [200, 30, 30], [240, 240, 240]),
+  azure_bluet: (p) => flower(p, 'cluster', [236, 236, 236], [236, 200, 60]),
+  oxeye_daisy: (p) => flower(p, 'daisy', [240, 240, 240], [230, 190, 40]),
+  cornflower: (p) => flower(p, 'star', [70, 100, 220], [40, 50, 140]),
+  allium: (p) => flower(p, 'ball', [180, 100, 220], [150, 70, 190]),
+  blue_orchid: (p) => flower(p, 'star', [60, 180, 230], [120, 220, 250]),
+  red_tulip: (p) => flower(p, 'tulip', [210, 40, 30], [150, 20, 20]),
+  orange_tulip: (p) => flower(p, 'tulip', [240, 130, 30], [190, 90, 20]),
+  white_tulip: (p) => flower(p, 'tulip', [236, 236, 236], [200, 200, 200]),
+  pink_tulip: (p) => flower(p, 'tulip', [240, 160, 200], [210, 120, 170]),
+  lily_of_the_valley: (p) => {
+    p.fill(() => [0, 0, 0, 0]);
+    p.line(7, 15, 7, 5, [60, 130, 40]);
+    p.line(7, 5, 11, 3, [60, 130, 40]);
+    p.line(8, 15, 4, 8, [80, 150, 50]);
+    for (const [x, y] of [[9, 5], [11, 5], [10, 7], [12, 4]]) { p.px(x, y, [245, 245, 245]); p.px(x, y + 1, [220, 220, 220]); }
+  },
+  smooth_stone: (p) => p.fill((x, y) => (x === 0 || y === 0 || x === 15 || y === 15 ? [138, 138, 138] : shade([160, 160, 160], (p.rand() - 0.5) * 8))),
+  smooth_stone_slab_side: (p) => p.fill((x, y) => (y === 0 || y === 15 || y === 7 || y === 8 ? (y === 8 ? [168, 168, 168] : [132, 132, 132]) : shade([158, 158, 158], (p.rand() - 0.5) * 8))),
+  mossy_cobblestone: (p) => {
+    cobble(p);
+    for (let i = 0; i < 26; i++) {
+      const x = Math.floor(p.rand() * 16);
+      const y = Math.floor(p.rand() * 16);
+      p.rect(x, y, x + (p.rand() < 0.5 ? 1 : 0), y, [70 + p.rand() * 30, 110 + p.rand() * 30, 40]);
+    }
+  },
+  glass_pane_top: (p) => p.fill((x) => (x === 7 || x === 8 ? [215, 235, 240] : [0, 0, 0, 0])),
   wheat_0: (p) => wheat(p, 0),
   wheat_1: (p) => wheat(p, 1),
   wheat_2: (p) => wheat(p, 2),
@@ -964,6 +1130,18 @@ const ITEM_PAINTERS = {
   wheat_seeds: (p, r) => { for (let i = 0; i < 7; i++) { const x = 3 + Math.floor(r() * 10); const y = 4 + Math.floor(r() * 9); p.px(x, y, [70, 150, 40]); p.px(x, y + 1, [50, 110, 30]); } },
   wheat: (p) => { for (let i = 0; i < 5; i++) { p.line(3 + i * 2, 14, 6 + i, 3, [200, 170, 60]); p.px(6 + i, 3, [230, 200, 90]); p.px(6 + i, 4, [230, 200, 90]); } p.line(4, 10, 12, 10, [140, 110, 40]); },
 
+
+  oak_door: (p) => {
+    p.rect(4, 1, 11, 14, (x, y) => (x === 4 || x === 11 || y === 1 || y === 14 ? [104, 76, 40] : [162, 130, 78]));
+    p.rect(5, 3, 7, 6, [0, 0, 0, 0]);
+    p.rect(8, 3, 10, 6, [0, 0, 0, 0]);
+    p.px(10, 9, [60, 60, 60]);
+  },
+  paper: (p) => { p.rect(3, 2, 12, 13, (x, y) => (x === 12 || y === 13 ? [200, 200, 190] : [245, 245, 238])); p.line(5, 5, 10, 5, [210, 210, 200]); p.line(5, 8, 10, 8, [210, 210, 200]); },
+  book: (p) => { p.rect(3, 2, 12, 13, (x, y) => (x === 3 || y === 2 || y === 13 ? [90, 50, 25] : [120, 70, 35])); p.rect(11, 3, 12, 12, [240, 235, 220]); p.rect(5, 5, 9, 6, [200, 160, 60]); },
+  snowball: (p, r) => blob(p, 7.5, 8, 5, [244, 250, 252], r),
+  bowl: (p) => { for (let y = 7; y < 13; y++) { const w = 6 - Math.max(0, y - 9); p.line(8 - w, y, 7 + w, y, y === 7 ? [90, 62, 32] : [140, 100, 56]); } },
+  mushroom_stew: (p) => { ITEM_PAINTERS.bowl(p); p.line(3, 7, 12, 7, [150, 100, 60]); p.line(4, 6, 11, 6, [170, 120, 70]); p.px(6, 6, [200, 60, 50]); p.px(9, 6, [120, 90, 60]); },
   bone: (p) => {
     const W = [236, 232, 214];
     const S = [196, 190, 170];

@@ -1,6 +1,6 @@
 // Deterministic infinite terrain generator. Any chunk can be generated independently from the seed.
 import { CHUNK_SIZE, WORLD_HEIGHT, SEA_LEVEL, CHUNK_VOLUME, blockIndex } from '../constants.js';
-import { B } from './blocks.js';
+import { B, IS_SOLID } from './blocks.js';
 import { SimplexNoise, mulberry32, hash3, hashFloat } from './noise.js';
 import { placeTree } from './trees.js';
 
@@ -17,6 +17,14 @@ export const BIOMES = {
   BIRCH_FOREST: 9,
 };
 export const BIOME_NAMES = ['海洋', '沙滩', '平原', '森林', '沙漠', '针叶林', '雪原', '山地', '河流', '桦木森林'];
+
+// Flower kinds per biome.
+const FLOWERS = {
+  [BIOMES.PLAINS]: [B.DANDELION, B.POPPY, B.AZURE_BLUET, B.OXEYE_DAISY, B.CORNFLOWER, B.RED_TULIP, B.ORANGE_TULIP, B.WHITE_TULIP, B.PINK_TULIP],
+  [BIOMES.FOREST]: [B.DANDELION, B.POPPY, B.LILY_OF_THE_VALLEY, B.ALLIUM],
+  [BIOMES.BIRCH_FOREST]: [B.DANDELION, B.POPPY, B.LILY_OF_THE_VALLEY, B.BLUE_ORCHID],
+  default: [B.DANDELION, B.POPPY],
+};
 
 // Trees per column for each biome.
 const TREE_DENSITY = [0, 0, 0.004, 0.045, 0, 0.03, 0.008, 0.006, 0, 0.04];
@@ -181,6 +189,7 @@ export class TerrainGenerator {
     this.placeOres(blocks, cx, cz);
     this.placePlants(blocks, heights, biomes, cx, cz);
     this.placeTrees(blocks, cx, cz);
+    this.placeSnow(blocks, cx, cz);
     return { blocks, meta, heights, biomes };
   }
 
@@ -231,11 +240,26 @@ export class TerrainGenerator {
         const wz = cz * 16 + lz;
         const r = hashFloat(seed, wx, 3, wz);
         const biome = biomes[lx + lz * 16];
+        if (ground === B.GRASS || ground === B.DIRT || ground === B.SAND) {
+          // Sugar cane along shores.
+          if (h === SEA_LEVEL && hashFloat(seed, wx, 6, wz) < 0.12 && this.nextToWater(blocks, lx, h, lz, cx, cz)) {
+            const height = 1 + Math.floor(hashFloat(seed, wx, 7, wz) * 3);
+            for (let i = 1; i <= height && h + i < WORLD_HEIGHT; i++) blocks[blockIndex(lx, h + i, lz)] = B.SUGAR_CANE;
+            continue;
+          }
+        }
         if (ground === B.GRASS) {
           const grassChance = biome === BIOMES.PLAINS ? 0.16 : biome === BIOMES.MOUNTAINS ? 0.04 : 0.07;
-          if (r < grassChance) blocks[aboveIdx] = B.TALL_GRASS;
-          else if (r < grassChance + (biome === BIOMES.PLAINS ? 0.02 : 0.006)) {
-            blocks[aboveIdx] = hashFloat(seed, wx, 4, wz) < 0.5 ? B.POPPY : B.DANDELION;
+          const flowerChance = biome === BIOMES.PLAINS ? 0.022 : biome === BIOMES.FOREST || biome === BIOMES.BIRCH_FOREST ? 0.01 : 0.004;
+          if (r < grassChance) {
+            blocks[aboveIdx] = biome === BIOMES.TAIGA && hashFloat(seed, wx, 8, wz) < 0.6 ? B.FERN : B.TALL_GRASS;
+          } else if (r < grassChance + flowerChance) {
+            // Flowers grow in patches of one kind.
+            const patch = hashFloat(seed, Math.floor(wx / 6), 9, Math.floor(wz / 6));
+            const set = FLOWERS[biome] || FLOWERS.default;
+            blocks[aboveIdx] = set[Math.floor(patch * set.length)];
+          } else if ((biome === BIOMES.TAIGA || biome === BIOMES.FOREST) && r > 0.9975) {
+            blocks[aboveIdx] = hashFloat(seed, wx, 10, wz) < 0.6 ? B.BROWN_MUSHROOM : B.RED_MUSHROOM;
           } else if (biome === BIOMES.PLAINS && r > 0.9993) {
             blocks[aboveIdx] = B.PUMPKIN;
           }
@@ -247,6 +271,35 @@ export class TerrainGenerator {
             blocks[aboveIdx] = B.DEAD_BUSH;
           }
         }
+      }
+    }
+  }
+
+  nextToWater(blocks, lx, y, lz, cx, cz) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const x = lx + dx;
+      const z = lz + dz;
+      if (x < 0 || x > 15 || z < 0 || z > 15) {
+        // Outside this chunk: ask the terrain shape instead.
+        if (this.column(cx * 16 + x, cz * 16 + z).h < SEA_LEVEL) return true;
+        continue;
+      }
+      if (blocks[blockIndex(x, y, z)] === B.WATER) return true;
+    }
+    return false;
+  }
+
+  // A layer of snow on the ground (and on leaves) in cold places.
+  placeSnow(blocks, cx, cz) {
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        const { h, temp } = this.column(cx * 16 + lx, cz * 16 + lz);
+        if (temp >= -0.35 && h <= 100) continue;
+        let y = WORLD_HEIGHT - 2;
+        while (y > 0 && blocks[blockIndex(lx, y, lz)] === B.AIR) y--;
+        const top = blocks[blockIndex(lx, y, lz)];
+        if (!IS_SOLID[top] || top === B.ICE || top === B.SNOW) continue;
+        blocks[blockIndex(lx, y + 1, lz)] = B.SNOW;
       }
     }
   }

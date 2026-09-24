@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { World } from './world/world.js';
 import { raycast } from './world/raycast.js';
 import { B, BLOCKS, IS_SOLID, IS_FLUID, RENDER } from './world/blocks.js';
+import { DIRS, shapeBoxes } from './world/shapes.js';
 import { BIOME_NAMES } from './world/generator.js';
 import { WORLD_HEIGHT } from './constants.js';
 import { Player } from './entity/player.js';
@@ -243,6 +244,7 @@ export class Game {
     const hit = active ? raycast(this.world, eye, dir, REACH) : null;
     const mobHit = active ? this.mobs.raycast(eye, dir, ENTITY_REACH) : null;
     const targetMob = mobHit && (!hit || mobHit.dist < hit.dist) ? mobHit.mob : null;
+    if (hit) hit.point = eye.clone().addScaledVector(dir, hit.dist);
     this.target = hit;
 
     if (hit && !targetMob && !this.settings.hideHud) {
@@ -492,44 +494,124 @@ export class Game {
     if (item.placeBlock !== undefined && hit) this.placeBlock(hit, item.placeBlock);
   }
 
+  // Horizontal direction the player is looking in (0 north, 1 east, 2 south, 3 west).
+  lookFacing() {
+    const dx = -Math.sin(this.player.yaw);
+    const dz = -Math.cos(this.player.yaw);
+    if (Math.abs(dx) > Math.abs(dz)) return dx > 0 ? 1 : 3;
+    return dz > 0 ? 2 : 0;
+  }
+
+  // Would a solid block at (x, y, z) with the given boxes overlap the player or a mob?
+  blockedByEntity(x, y, z, boxes) {
+    const hits = (e, b) => e.pos.x + e.halfW > x + b[0] && e.pos.x - e.halfW < x + b[3]
+      && e.pos.y + e.height > y + b[1] && e.pos.y < y + b[4]
+      && e.pos.z + e.halfW > z + b[2] && e.pos.z - e.halfW < z + b[5];
+    for (const b of boxes) {
+      if (hits(this.player, b)) return true;
+      for (const m of this.mobs.mobs) if (!m.dead && hits(m, b)) return true;
+    }
+    return false;
+  }
+
+  canPlaceAt(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return false;
+    const cur = this.world.getBlock(x, y, z);
+    return cur >= 0 && (cur === 0 || BLOCKS[cur].replaceable);
+  }
+
   placeBlock(hit, blockId) {
     const world = this.world;
-    const player = this.player;
     const target = BLOCKS[hit.id];
+    const b = BLOCKS[blockId];
+    const ny = hit.normal[1];
+    const fy = hit.point ? hit.point.y - hit.y : 0.5; // where on the block face we clicked
+
+    // Slabs merge into double slabs; snow layers stack.
+    if (b.shape === 'slab' && hit.id === blockId && ((ny === 1 && !(hit.meta & 1)) || (ny === -1 && (hit.meta & 1)))) {
+      this.finishPlace(hit.x, hit.y, hit.z, b.doubleSlab, 0);
+      return;
+    }
+    if (b.shape === 'snow' && hit.id === blockId && ny === 1) {
+      if ((hit.meta & 7) < 7) this.finishPlace(hit.x, hit.y, hit.z, blockId, (hit.meta & 7) + 1);
+      else this.finishPlace(hit.x, hit.y, hit.z, B.SNOW_BLOCK, 0);
+      return;
+    }
+
     let x = hit.x;
     let y = hit.y;
     let z = hit.z;
-    if (!(target.replaceable && !IS_FLUID[hit.id])) {
+    if (!(target.replaceable && !IS_FLUID[hit.id] && !(target.shape === 'snow' && hit.meta > 0))) {
       x += hit.normal[0];
-      y += hit.normal[1];
+      y += ny;
       z += hit.normal[2];
     }
-    if (y < 0 || y >= WORLD_HEIGHT) return;
+    if (!this.canPlaceAt(x, y, z)) {
+      const cur = world.getBlock(x, y, z);
+      // Clicking next to a half slab of the same kind fills it up.
+      if (b.shape === 'slab' && cur === blockId) this.finishPlace(x, y, z, b.doubleSlab, 0);
+      return;
+    }
     const cur = world.getBlock(x, y, z);
-    if (cur < 0 || !(cur === 0 || BLOCKS[cur].replaceable)) return;
-    const b = BLOCKS[blockId];
-    if (b.solid) {
-      const box = [x, y, z, x + 1, y + b.height, z + 1];
-      const hits = (e) => e.pos.x + e.halfW > box[0] && e.pos.x - e.halfW < box[3]
-        && e.pos.y + e.height > box[1] && e.pos.y < box[4]
-        && e.pos.z + e.halfW > box[2] && e.pos.z - e.halfW < box[5];
-      if (hits(player)) return;
-      for (const m of this.mobs.mobs) if (!m.dead && hits(m)) return;
-    }
-    if (b.support && !world.hasSupport(x, y, z, b.support)) return;
+    const facing = this.lookFacing();
     let meta = 0;
-    if (b.orientable) {
-      // Front faces the player.
-      const dx = -Math.sin(player.yaw);
-      const dz = -Math.cos(player.yaw);
-      let facing;
-      if (Math.abs(dx) > Math.abs(dz)) facing = dx > 0 ? 1 : 3;
-      else facing = dz > 0 ? 2 : 0;
-      meta = (facing + 2) % 4;
-    }
+    const side = hit.normal[0] !== 0 || hit.normal[2] !== 0;
+    const normalDir = hit.normal[0] === 1 ? 1 : hit.normal[0] === -1 ? 3 : hit.normal[2] === 1 ? 2 : 0;
+    if (b.orientable) meta = (facing + 2) % 4; // front faces the player
     if (b.leaves) meta = 1; // player-placed leaves never decay
+    if (b.shape === 'slab') meta = ny === -1 || (side && fy > 0.5) ? 1 : 0;
+    if (b.shape === 'stairs') meta = facing | (ny === -1 || (side && fy > 0.5) ? 4 : 0);
+    if (b.shape === 'gate') meta = facing;
+    if (b.shape === 'ladder') {
+      if (!side || !world.getBlock(hit.x, hit.y, hit.z) || !BLOCKS[hit.id].opaque) return;
+      meta = normalDir;
+    }
+    if (blockId === B.TORCH) {
+      if (side && BLOCKS[hit.id].opaque) meta = 1 + normalDir;
+      else if (ny !== 1) return;
+    }
+
+    // Two-block things: doors (upwards) and beds (towards the facing).
+    if (b.shape === 'door') {
+      if (!this.canPlaceAt(x, y + 1, z) || !IS_SOLID[Math.max(0, world.getBlock(x, y - 1, z))]) return;
+      const box = [[0, 0, 0, 1, 2, 1]];
+      if (this.blockedByEntity(x, y, z, box)) return;
+      const left = DIRS[(facing + 3) & 3];
+      const right = DIRS[(facing + 1) & 3];
+      const solidAt = (d) => IS_SOLID[Math.max(0, world.getBlock(x + d[0], y, z + d[1]))] || IS_SOLID[Math.max(0, world.getBlock(x + d[0], y + 1, z + d[1]))];
+      const doorLeft = world.getBlock(x + left[0], y, z + left[1]) === blockId;
+      const hingeRight = doorLeft || (solidAt(right) && !solidAt(left));
+      meta = facing | (hingeRight ? 16 : 0);
+      world.setBlock(x, y, z, blockId, { meta, update: false });
+      world.setBlock(x, y + 1, z, blockId, { meta: meta | 8 });
+      this.afterPlace(x, y, z, blockId);
+      return;
+    }
+    if (b.shape === 'bed') {
+      const d = DIRS[facing];
+      const hx = x + d[0];
+      const hz = z + d[1];
+      if (!this.canPlaceAt(hx, y, hz)) return;
+      if (!IS_SOLID[Math.max(0, world.getBlock(x, y - 1, z))] || !IS_SOLID[Math.max(0, world.getBlock(hx, y - 1, hz))]) return;
+      if (this.blockedByEntity(x, y, z, [[0, 0, 0, 1, 0.6, 1]]) || this.blockedByEntity(hx, y, hz, [[0, 0, 0, 1, 0.6, 1]])) return;
+      world.setBlock(x, y, z, blockId, { meta: facing, update: false });
+      world.setBlock(hx, y, hz, blockId, { meta: facing | 4 });
+      this.afterPlace(x, y, z, blockId);
+      return;
+    }
+
+    if (b.solid && this.blockedByEntity(x, y, z, b.shape ? shapeBoxes(blockId, meta, 'collision') : [[0, 0, 0, 1, b.height, 1]])) return;
+    if (b.support && !world.hasSupportFor(x, y, z, b.support, meta)) return;
     if (cur !== 0 && BLOCKS[cur].render === RENDER.CROSS) this.spawnBlockDrops(x, y, z, cur, 0, null);
-    world.setBlock(x, y, z, blockId, { meta });
+    this.finishPlace(x, y, z, blockId, meta);
+  }
+
+  finishPlace(x, y, z, blockId, meta) {
+    this.world.setBlock(x, y, z, blockId, { meta });
+    this.afterPlace(x, y, z, blockId);
+  }
+
+  afterPlace(x, y, z, blockId) {
     this.player.inventory.consumeHand(1);
     this.hand.startSwing();
     this.blockSound('place', x + 0.5, y + 0.5, z + 0.5, blockId);
@@ -543,9 +625,25 @@ export class Game {
       if (tile) this.openScreen('furnace', { tile });
     } else if (kind === 'chest') {
       const tile = this.world.tiles.get(key);
-      if (tile) this.openScreen('chest', { tile });
+      if (tile) {
+        this.openScreen('chest', { tile, pos: [hit.x, hit.y, hit.z] });
+        this.sound('chest.open', hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
+      }
     } else if (kind === 'bed') {
       this.trySleep(hit);
+    } else if (kind === 'door') {
+      const open = this.world.toggleDoor(hit.x, hit.y, hit.z);
+      this.sound(open ? 'door.open' : 'door.close', hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
+    } else if (kind === 'gate') {
+      const meta = this.world.getMeta(hit.x, hit.y, hit.z);
+      let next = meta ^ 4;
+      // Opening swings the gate away from the player.
+      if (next & 4) {
+        const f = this.lookFacing();
+        if (((meta & 3) + 2) % 4 === f) next = (next & ~3) | f;
+      }
+      this.world.setBlock(hit.x, hit.y, hit.z, B.OAK_FENCE_GATE, { meta: next, update: false });
+      this.sound(next & 4 ? 'gate.open' : 'gate.close', hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
     }
   }
 

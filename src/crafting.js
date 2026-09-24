@@ -44,6 +44,28 @@ shaped([' SX', 'S X', ' SX'], { S: I.STICK, X: I.STRING }, I.BOW);
 shaped(['F', 'S', 'E'], { F: I.FLINT, S: I.STICK, E: I.FEATHER }, I.ARROW, 4);
 shapeless([I.BONE], I.BONE_MEAL, 3);
 shaped(['SS', 'SS'], { S: I.STRING }, I.WHITE_WOOL);
+shaped(['PP', 'PP', 'PP'], { P: I.OAK_PLANKS }, I.OAK_DOOR, 3);
+shaped(['S S', 'SSS', 'S S'], { S: I.STICK }, I.LADDER, 3);
+shaped(['PSP', 'PSP'], { P: 'planks', S: I.STICK }, I.OAK_FENCE, 3);
+shaped(['SPS', 'SPS'], { P: 'planks', S: I.STICK }, I.OAK_FENCE_GATE);
+shaped(['GGG', 'GGG'], { G: I.GLASS }, I.GLASS_PANE, 16);
+shaped(['PPP', 'BBB', 'PPP'], { P: 'planks', B: I.BOOK }, I.BOOKSHELF);
+shaped(['CCC'], { C: I.SUGAR_CANE }, I.PAPER, 3);
+shapeless([I.PAPER, I.PAPER, I.PAPER, I.LEATHER], I.BOOK);
+shaped(['SS', 'SS'], { S: I.SNOWBALL }, I.SNOW_BLOCK);
+shaped(['BBB'], { B: I.SNOW_BLOCK }, I.SNOW, 6);
+shaped(['P P', ' P '], { P: 'planks' }, I.BOWL, 4);
+shapeless([I.BOWL, I.BROWN_MUSHROOM, I.RED_MUSHROOM], I.MUSHROOM_STEW);
+// Slabs (6 from a row of 3) and stairs (4 from 6).
+for (const [slab, stairs, base] of [
+  [I.OAK_SLAB, I.OAK_STAIRS, I.OAK_PLANKS], [I.BIRCH_SLAB, I.BIRCH_STAIRS, I.BIRCH_PLANKS], [I.SPRUCE_SLAB, I.SPRUCE_STAIRS, I.SPRUCE_PLANKS],
+  [I.COBBLESTONE_SLAB, I.COBBLESTONE_STAIRS, I.COBBLESTONE], [I.STONE_SLAB, null, I.SMOOTH_STONE],
+  [I.STONE_BRICK_SLAB, I.STONE_BRICK_STAIRS, I.STONE_BRICKS], [I.SANDSTONE_SLAB, I.SANDSTONE_STAIRS, I.SANDSTONE],
+  [I.BRICK_SLAB, I.BRICK_STAIRS, I.BRICKS],
+]) {
+  shaped(['XXX'], { X: base }, slab, 6);
+  if (stairs) shaped(['X  ', 'XX ', 'XXX'], { X: base }, stairs, 4);
+}
 
 for (const [block, material] of [[I.COAL_BLOCK, I.COAL], [I.IRON_BLOCK, I.IRON_INGOT], [I.GOLD_BLOCK, I.GOLD_INGOT], [I.DIAMOND_BLOCK, I.DIAMOND]]) {
   shaped(['XXX', 'XXX', 'XXX'], { X: material }, block);
@@ -138,6 +160,7 @@ export const SMELTING = {
   [I.CLAY_BALL]: I.BRICK,
   [I.CLAY]: I.BRICKS,
   [I.CHICKEN]: I.COOKED_CHICKEN,
+  [I.STONE]: I.SMOOTH_STONE,
 };
 
 // Experience per smelted item (collected when the output is taken).

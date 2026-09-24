@@ -1,6 +1,6 @@
 // Dropped item entities: fall, float, merge and get picked up by the player.
 import * as THREE from 'three';
-import { moveEntity, fluidSubmersion } from './physics.js';
+import { moveEntity, fluidSubmersion, pointInSolid } from './physics.js';
 import { makeItemMesh, isCubeItem } from '../render/itemModels.js';
 import { B } from '../world/blocks.js';
 import { maxStack } from '../items.js';
@@ -73,8 +73,7 @@ class ItemEntity {
       this.vel.z *= drag;
     }
     // Pushed out of blocks it got stuck in.
-    const id = world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.1), Math.floor(this.pos.z));
-    if (id > 0 && id !== B.WATER && id !== B.LAVA && this.game.isSolidBlock(id)) {
+    if (world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.1), Math.floor(this.pos.z)) > 0 && pointInSolid(world, this.pos.x, this.pos.y + 0.1, this.pos.z)) {
       this.pos.y += 4 * dt;
       this.vel.set(0, 0, 0);
     } else {

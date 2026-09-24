@@ -11,7 +11,7 @@ function item(id, key, name, props = {}) {
 // Blocks that exist in the world but never as an inventory item.
 const NON_ITEM_BLOCKS = new Set(['air', 'water', 'lava', 'lit_furnace', 'wheat', 'farmland']);
 for (const b of BLOCKS) {
-  if (!b || NON_ITEM_BLOCKS.has(b.key)) continue;
+  if (!b || NON_ITEM_BLOCKS.has(b.key) || b.slabOf) continue;
   item(b.id, b.key, b.name, { isBlock: true, placeBlock: b.id, stack: b.key === 'bed' ? 1 : 64 });
 }
 
@@ -47,10 +47,15 @@ item(286, 'string', '线');
 item(287, 'feather', '羽毛');
 item(288, 'arrow', '箭');
 item(289, 'bow', '弓', { stack: 1, durability: 384, bow: true });
-item(290, 'egg', '鸡蛋', { stack: 16, throwable: true });
+item(290, 'egg', '鸡蛋', { stack: 16, throwable: 'egg' });
 item(291, 'chicken', '生鸡肉', { food: { hunger: 2, saturation: 1.2, effects: [['hunger', 30, 0.3]] } });
 item(292, 'cooked_chicken', '熟鸡肉', { food: { hunger: 6, saturation: 7.2 } });
 item(293, 'spider_eye', '蜘蛛眼', { food: { hunger: 2, saturation: 3.2, effects: [['poison', 5, 1]] } });
+item(294, 'paper', '纸');
+item(295, 'book', '书');
+item(296, 'snowball', '雪球', { stack: 16, throwable: 'snowball' });
+item(297, 'bowl', '碗');
+item(298, 'mushroom_stew', '蘑菇煲', { stack: 1, food: { hunger: 6, saturation: 7.2, leaves: 297 } });
 
 export const TOOL_MATERIALS = [
   { key: 'wooden', name: '木', tier: 0, speed: 2, durability: 59, color: [150, 116, 65] },

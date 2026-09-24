@@ -9,9 +9,12 @@ export const TILES = [
   'cactus_side', 'cactus_top', 'birch_log', 'birch_log_top', 'birch_leaves', 'spruce_log', 'spruce_log_top', 'spruce_leaves',
   'birch_planks', 'spruce_planks', 'tall_grass', 'poppy', 'dandelion', 'dead_bush', 'clay', 'bricks',
   'chest_front', 'chest_side', 'chest_top', 'white_wool', 'stone_bricks', 'ice', 'obsidian', 'coal_block',
-  'iron_block', 'gold_block', 'diamond_block', 'bed_top', 'bed_side', 'oak_sapling', 'birch_sapling', 'spruce_sapling',
+  'iron_block', 'gold_block', 'diamond_block', 'bed_head_top', 'bed_foot_top', 'oak_sapling', 'birch_sapling', 'spruce_sapling',
   'cactus_bottom', 'pumpkin_top', 'pumpkin_side', 'pumpkin_face', 'jack_o_lantern', 'farmland', 'farmland_wet', 'wheat_0',
-  'wheat_1', 'wheat_2', 'wheat_3',
+  'wheat_1', 'wheat_2', 'wheat_3', 'bed_head_end', 'bed_foot_end', 'bed_side_head', 'bed_side_foot', 'chest_latch',
+  'oak_door_top', 'oak_door_bottom', 'ladder', 'bookshelf', 'sugar_cane', 'fern', 'brown_mushroom', 'red_mushroom',
+  'azure_bluet', 'oxeye_daisy', 'cornflower', 'allium', 'blue_orchid', 'red_tulip', 'orange_tulip', 'white_tulip',
+  'pink_tulip', 'lily_of_the_valley', 'smooth_stone', 'smooth_stone_slab_side', 'mossy_cobblestone', 'glass_pane_top',
 ];
 export const TILE_INDEX = Object.fromEntries(TILES.map((n, i) => [n, i]));
 export const ATLAS_TILES_PER_ROW = 16;
@@ -22,7 +25,8 @@ export const RENDER = {
   CROSS: 2,
   TORCH: 3,
   LIQUID: 4,
-  BED: 5,
+  BED: 5, // partial-height cube (farmland)
+  SHAPE: 6, // boxes from shapes.js (slabs, stairs, doors, ...)
 };
 
 export const LAYER = {
@@ -62,6 +66,7 @@ function def(id, key, name, props = {}) {
     drops: null, // function(rand, toolItem) => [[id, count], ...] or null for self
     height: 1,
     tint: null, // 'grass' | 'foliage' | 'water': biome colour applied to texels with alpha < 255
+    shape: null, // see shapes.js
     ...props,
   };
   b.textures = textures;
@@ -122,6 +127,7 @@ def(20, 'lit_furnace', '熔炉', {
   hardness: 3.5, tool: 'pickaxe', harvestLevel: 0, interact: 'furnace', orientable: true, light: 13,
   drops: () => [[19, 1]],
 });
+// meta 0 = standing, 1..4 = on a wall, leaning towards direction (meta - 1).
 def(21, 'torch', '火把', {
   render: RENDER.TORCH, layer: LAYER.CUTOUT, solid: false, opaque: false, light: 14, hardness: 0,
   support: 'torch', sound: 'wood',
@@ -152,7 +158,7 @@ def(35, 'dead_bush', '枯萎的灌木', { ...cross, replaceable: true, support: 
 def(36, 'clay', '黏土块', { hardness: 0.6, tool: 'shovel', sound: 'gravel', drops: () => [[276, 4]] });
 def(37, 'bricks', '砖块', { hardness: 2, tool: 'pickaxe', harvestLevel: 0 });
 def(38, 'chest', '箱子', {
-  tex: { top: 'chest_top', side: 'chest_side', front: 'chest_front' },
+  tex: { top: 'chest_top', side: 'chest_side', front: 'chest_front' }, render: RENDER.SHAPE, shape: 'chest',
   hardness: 2.5, tool: 'axe', sound: 'wood', interact: 'chest', orientable: true, opaque: false,
 });
 def(39, 'white_wool', '白色羊毛', { hardness: 0.8, sound: 'wool' });
@@ -163,9 +169,10 @@ def(43, 'coal_block', '煤炭块', { hardness: 5, tool: 'pickaxe', harvestLevel:
 def(44, 'iron_block', '铁块', { hardness: 5, tool: 'pickaxe', harvestLevel: 1, sound: 'metal' });
 def(45, 'gold_block', '金块', { hardness: 3, tool: 'pickaxe', harvestLevel: 2, sound: 'metal' });
 def(46, 'diamond_block', '钻石块', { hardness: 5, tool: 'pickaxe', harvestLevel: 2, sound: 'metal' });
+// Two blocks long: meta bits 0-1 = facing (towards the head), bit 2 = head part.
 def(47, 'bed', '床', {
-  tex: { top: 'bed_top', bottom: 'oak_planks', side: 'bed_side' }, render: RENDER.BED, opaque: false,
-  hardness: 0.2, sound: 'wood', interact: 'bed', support: 'solid', height: 9 / 16,
+  tex: { top: 'bed_foot_top', bottom: 'oak_planks', side: 'bed_side_foot' }, render: RENDER.SHAPE, shape: 'bed', opaque: false,
+  hardness: 0.2, sound: 'wood', interact: 'bed', support: 'solid', twoPart: 'bed',
 });
 def(48, 'oak_sapling', '橡树树苗', { ...cross, support: 'soil', sapling: 'oak' });
 def(49, 'birch_sapling', '白桦树苗', { ...cross, support: 'soil', sapling: 'birch' });
@@ -190,6 +197,63 @@ def(57, 'wheat', '小麦', {
     : [[280, 1]]),
 });
 
+// ------------------------------------------------------------ building blocks with shapes
+const slabBase = { render: RENDER.SHAPE, shape: 'slab', opaque: false, lightAtten: 15, neighborLight: true };
+const stairBase = { render: RENDER.SHAPE, shape: 'stairs', opaque: false, lightAtten: 15, neighborLight: true };
+const woodProps = { hardness: 2, tool: 'axe', sound: 'wood' };
+const stoneProps = { hardness: 2, tool: 'pickaxe', harvestLevel: 0 };
+// [slab id, double id, stairs id or 0, key, name, texture, props]
+const SLAB_TYPES = [
+  [60, 68, 76, 'oak', '橡木', 'oak_planks', woodProps],
+  [61, 69, 77, 'birch', '白桦木', 'birch_planks', woodProps],
+  [62, 70, 78, 'spruce', '云杉木', 'spruce_planks', woodProps],
+  [63, 71, 79, 'cobblestone', '圆石', 'cobblestone', stoneProps],
+  [64, 72, 0, 'stone', '石', { top: 'smooth_stone', side: 'smooth_stone_slab_side' }, stoneProps],
+  [65, 73, 80, 'stone_brick', '石砖', 'stone_bricks', stoneProps],
+  [66, 74, 81, 'sandstone', '砂岩', { top: 'sandstone_top', bottom: 'sandstone_bottom', side: 'sandstone_side' }, { hardness: 0.8, tool: 'pickaxe', harvestLevel: 0 }],
+  [67, 75, 82, 'brick', '砖', 'bricks', stoneProps],
+];
+for (const [sid, did, tid, key, name, tex, props] of SLAB_TYPES) {
+  def(sid, `${key}_slab`, `${name}台阶`, { ...slabBase, ...props, tex, doubleSlab: did });
+  def(did, `${key}_double_slab`, `${name}台阶`, { ...props, tex: key === 'stone' ? 'smooth_stone' : tex, drops: () => [[sid, 2]], slabOf: sid });
+  if (tid) def(tid, `${key}_stairs`, `${name}楼梯`, { ...stairBase, ...props, tex });
+}
+// meta: bits 0-1 facing, bit 2 open, bit 3 upper half, bit 4 hinge on the right.
+def(83, 'oak_door', '橡木门', {
+  tex: 'oak_door_bottom', render: RENDER.SHAPE, shape: 'door', layer: LAYER.CUTOUT, opaque: false, hardness: 3, tool: 'axe',
+  sound: 'wood', interact: 'door', twoPart: 'door', itemSprite: true, support: 'solid',
+});
+// meta: facing (away from the wall).
+def(84, 'ladder', '梯子', {
+  tex: 'ladder', render: RENDER.SHAPE, shape: 'ladder', layer: LAYER.CUTOUT, opaque: false, hardness: 0.4, tool: 'axe',
+  sound: 'wood', support: 'wall', climbable: true,
+});
+def(85, 'oak_fence', '橡木栅栏', { tex: 'oak_planks', render: RENDER.SHAPE, shape: 'fence', opaque: false, ...woodProps });
+// meta: bits 0-1 facing, bit 2 open.
+def(86, 'oak_fence_gate', '橡木栅栏门', { tex: 'oak_planks', render: RENDER.SHAPE, shape: 'gate', opaque: false, interact: 'gate', ...woodProps });
+def(87, 'glass_pane', '玻璃板', {
+  tex: { top: 'glass_pane_top', side: 'glass' }, render: RENDER.SHAPE, shape: 'pane', layer: LAYER.CUTOUT, opaque: false,
+  hardness: 0.3, sound: 'glass', drops: () => [],
+});
+def(88, 'bookshelf', '书架', { tex: { top: 'oak_planks', side: 'bookshelf' }, hardness: 1.5, tool: 'axe', sound: 'wood', drops: () => [[295, 3]] });
+def(89, 'sugar_cane', '甘蔗', { ...cross, support: 'cane', tint: 'grass', drops: () => [[89, 1]] });
+def(90, 'fern', '蕨', { ...cross, replaceable: true, support: 'soil', tint: 'grass', drops: (r) => (r() < 0.125 ? [[280, 1]] : []) });
+def(91, 'brown_mushroom', '棕色蘑菇', { ...cross, support: 'mushroom', light: 1 });
+def(92, 'red_mushroom', '红色蘑菇', { ...cross, support: 'mushroom' });
+// meta: layers - 1 (0..7).
+def(93, 'snow', '雪', {
+  tex: 'snow', render: RENDER.SHAPE, shape: 'snow', opaque: false, hardness: 0.1, tool: 'shovel', sound: 'snow',
+  support: 'solid', replaceable: true, drops: (r, tool, meta) => (tool && tool.type === 'shovel' ? [[296, (meta & 7) + 1]] : []),
+});
+def(94, 'smooth_stone', '平滑石头', { hardness: 2, tool: 'pickaxe', harvestLevel: 0 });
+def(95, 'mossy_cobblestone', '苔石', { hardness: 2, tool: 'pickaxe', harvestLevel: 0 });
+const FLOWERS = [
+  [96, 'azure_bluet', '蓝花美耳草'], [97, 'oxeye_daisy', '滨菊'], [98, 'cornflower', '矢车菊'], [99, 'allium', '绒球葱'],
+  [100, 'blue_orchid', '兰花'], [101, 'red_tulip', '红色郁金香'], [102, 'orange_tulip', '橙色郁金香'],
+  [103, 'white_tulip', '白色郁金香'], [104, 'pink_tulip', '粉红色郁金香'], [105, 'lily_of_the_valley', '铃兰'],
+];
+for (const [id, key, name] of FLOWERS) def(id, key, name, { ...cross, support: 'soil' });
+
 export const B = Object.fromEntries(BLOCKS.filter(Boolean).map((b) => [b.key.toUpperCase(), b.id]));
 
 // Flat typed lookup tables for hot loops (mesher, lighting, physics).
@@ -208,6 +272,8 @@ export const TEX_SIDE = new Uint16Array(MAX_BLOCK_ID);
 export const TEX_FRONT = new Uint16Array(MAX_BLOCK_ID);
 export const IS_ORIENTABLE = new Uint8Array(MAX_BLOCK_ID);
 export const TINT = { NONE: 0, GRASS: 1, FOLIAGE: 2, WATER: 3 };
+// Light-blocking but not full blocks (slabs, stairs) show the brightest neighbouring light.
+export const NEIGHBOR_LIGHT = new Uint8Array(MAX_BLOCK_ID);
 export const TINT_TYPE = new Uint8Array(MAX_BLOCK_ID);
 
 for (const b of BLOCKS) {
@@ -222,6 +288,7 @@ for (const b of BLOCKS) {
   IS_FLUID[b.id] = b.fluid ? 1 : 0;
   IS_ORIENTABLE[b.id] = b.orientable ? 1 : 0;
   TINT_TYPE[b.id] = b.tint ? TINT[b.tint.toUpperCase()] : 0;
+  NEIGHBOR_LIGHT[b.id] = b.neighborLight ? 1 : 0;
   for (const [slot, arr] of [['top', TEX_TOP], ['bottom', TEX_BOTTOM], ['side', TEX_SIDE], ['front', TEX_FRONT]]) {
     const t = b.textures[slot];
     if (b.render !== RENDER.NONE && TILE_INDEX[t] === undefined) {

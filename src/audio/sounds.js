@@ -552,6 +552,52 @@ function eggPlop(sr, rand) {
   return finish(o, sr, 0.6);
 }
 
+// ------------------------------------------------------------------ doors, gates & chests
+// Wooden creak: a train of resonant stick-slip clicks whose rate glides.
+function creak(o, sr, rand, t0, dur, rate0, rate1, freq, amp = 1) {
+  let t = t0;
+  while (t < t0 + dur) {
+    const u = (t - t0) / dur;
+    const f = rr(rand, freq * 0.85, freq * 1.15) * (1 + 0.3 * u);
+    ping(o, sr, t, f, 0.006, amp * (0.5 + 0.5 * Math.sin(Math.PI * u)) * rr(rand, 0.6, 1), f * 0.97, 0.0005);
+    t += 1 / (rate0 + (rate1 - rate0) * u) * rr(rand, 0.8, 1.2);
+  }
+}
+
+function doorSound(sr, rand, open) {
+  const o = buf(sr, 0.6);
+  if (open) {
+    creak(o, sr, rand, 0.02, 0.32, 40, 90, rr(rand, 700, 1000), 0.6);
+    grain(o, sr, 0, 0.01, 2500, 2, 0.4, rand);
+  } else {
+    creak(o, sr, rand, 0.0, 0.15, 90, 50, rr(rand, 700, 900), 0.4);
+    ping(o, sr, 0.16, rr(rand, 110, 140), 0.05, 1, 80, 0.001);
+    noiseShape(o, sr, rand, { from: 0.16, attack: 0.001, decay: 0.02, type: 'lowpass', freq: 900, amp: 0.8 });
+    grain(o, sr, 0.17, 0.01, 3000, 2, 0.5, rand);
+  }
+  return finish(highpass(o, sr, 80), sr, 0.8);
+}
+
+function gateSound(sr, rand, open) {
+  const o = buf(sr, 0.4);
+  creak(o, sr, rand, 0, open ? 0.2 : 0.1, 70, 110, rr(rand, 1000, 1400), 0.5);
+  ping(o, sr, open ? 0.18 : 0.1, rr(rand, 220, 300), 0.02, 0.8, 180, 0.001);
+  grain(o, sr, open ? 0.18 : 0.1, 0.008, 3500, 2, 0.4, rand);
+  return finish(highpass(o, sr, 120), sr, 0.7);
+}
+
+function chestSound(sr, rand, open) {
+  const o = buf(sr, 0.8);
+  if (open) {
+    creak(o, sr, rand, 0.02, 0.45, 35, 70, rr(rand, 500, 700), 0.7);
+  } else {
+    creak(o, sr, rand, 0, 0.2, 70, 40, rr(rand, 500, 650), 0.5);
+    ping(o, sr, 0.22, rr(rand, 90, 120), 0.06, 1, 70, 0.001);
+    noiseShape(o, sr, rand, { from: 0.22, attack: 0.001, decay: 0.03, type: 'lowpass', freq: 700, amp: 0.9 });
+  }
+  return finish(highpass(o, sr, 60), sr, 0.8);
+}
+
 // ------------------------------------------------------------------ ambience
 
 function windLoop(sr, rand) {
@@ -766,6 +812,13 @@ def('attack.crit', attackCrit, { gain: 0.65, variants: 2 });
 def('attack.knockback', attackStrong, { gain: 0.7, variants: 2, pitch: [0.75, 0.85] });
 def('throw', throwSound, { gain: 0.5, variants: 2, pitch: [1, 1] });
 def('egg', eggPlop, { gain: 0.6, variants: 2 });
+
+def('door.open', (sr, r) => doorSound(sr, r, true), { gain: 0.7, variants: 3 });
+def('door.close', (sr, r) => doorSound(sr, r, false), { gain: 0.75, variants: 3 });
+def('gate.open', (sr, r) => gateSound(sr, r, true), { gain: 0.6, variants: 2 });
+def('gate.close', (sr, r) => gateSound(sr, r, false), { gain: 0.6, variants: 2 });
+def('chest.open', (sr, r) => chestSound(sr, r, true), { gain: 0.6, variants: 2 });
+def('chest.close', (sr, r) => chestSound(sr, r, false), { gain: 0.65, variants: 2 });
 
 def('amb.wind', windLoop, { bus: 'ambient', variants: 1, loop: true, pitch: [1, 1] });
 def('amb.underwater', underwaterLoop, { bus: 'ambient', variants: 1, loop: true, pitch: [1, 1] });

@@ -7,6 +7,7 @@ import {
 } from './blocks.js';
 import { TerrainGenerator } from './generator.js';
 import { placeTree, treeHeight } from './trees.js';
+import { DIRS, attachedDir } from './shapes.js';
 import { mulberry32 } from './noise.js';
 import { SMELTING, SMELT_TIME, SMELT_XP } from '../crafting.js';
 import { FUEL, maxStack, I } from '../items.js';
@@ -247,6 +248,10 @@ export class World {
       if (below === 0 || (below > 0 && (BLOCKS[below].replaceable))) this.fall(x, y, z, id);
       return;
     }
+    if (b.twoPart && !this.partnerPresent(x, y, z, id)) {
+      this.setBlock(x, y, z, B.AIR); // the other half dropped the item
+      return;
+    }
     if (b.support && !this.hasSupport(x, y, z, b.support)) {
       this.breakBlock(x, y, z, true);
       return;
@@ -254,6 +259,40 @@ export class World {
     if (id === B.FARMLAND && IS_SOLID[this.getBlock(x, y + 1, z)] && this.getBlock(x, y + 1, z) !== B.WHEAT) {
       this.setBlock(x, y, z, B.DIRT);
     }
+  }
+
+  // Doors and beds are made of two blocks; each half needs the other.
+  partnerPresent(x, y, z, id) {
+    const meta = this.getMeta(x, y, z);
+    let px = x;
+    let py = y;
+    let pz = z;
+    let want;
+    if (BLOCKS[id].twoPart === 'door') {
+      py += meta & 8 ? -1 : 1;
+      want = (m) => (m & 8) !== (meta & 8);
+    } else {
+      const d = DIRS[meta & 3];
+      const s = meta & 4 ? -1 : 1;
+      px += d[0] * s;
+      pz += d[1] * s;
+      want = (m) => (m & 4) !== (meta & 4);
+    }
+    const other = this.getBlock(px, py, pz);
+    if (other < 0) return true;
+    return other === id && want(this.getMeta(px, py, pz));
+  }
+
+  // Support check for a block about to be placed with `meta` (uses the meta instead of the world).
+  hasSupportFor(x, y, z, kind, meta) {
+    const d = kind === 'wall' ? DIRS[attachedDir(meta)] : kind === 'torch' && meta >= 1 && meta <= 4 ? DIRS[meta - 1] : null;
+    if (kind === 'wall') return IS_OPAQUE[Math.max(0, this.getBlock(x + d[0], y, z + d[1]))] === 1;
+    if (kind === 'torch' && d) return IS_OPAQUE[Math.max(0, this.getBlock(x - d[0], y, z - d[1]))] === 1;
+    if (kind === 'torch') {
+      const below = this.getBlock(x, y - 1, z);
+      return below < 0 || IS_OPAQUE[below] === 1 || below === B.FARMLAND || below === B.OAK_FENCE || below === B.GLASS;
+    }
+    return this.hasSupport(x, y, z, kind);
   }
 
   hasSupport(x, y, z, kind) {
@@ -270,16 +309,49 @@ export class World {
         }
         return true;
       }
-      case 'solid': return IS_SOLID[below] === 1;
+      case 'solid': {
+        const id = this.getBlock(x, y, z);
+        // The upper half of a door stands on the lower half.
+        if (id === B.OAK_DOOR && (this.getMeta(x, y, z) & 8)) return true;
+        return IS_SOLID[below] === 1;
+      }
       case 'torch': {
-        if (IS_OPAQUE[below] || below === B.FARMLAND) return true;
+        const meta = this.getMeta(x, y, z);
+        if (meta >= 1 && meta <= 4) {
+          const d = DIRS[meta - 1];
+          return IS_OPAQUE[Math.max(0, this.getBlock(x - d[0], y, z - d[1]))] === 1;
+        }
+        return IS_OPAQUE[below] === 1 || below === B.FARMLAND || below === B.OAK_FENCE || below === B.GLASS;
+      }
+      case 'wall': {
+        const d = DIRS[attachedDir(this.getMeta(x, y, z))];
+        return IS_OPAQUE[Math.max(0, this.getBlock(x + d[0], y, z + d[1]))] === 1;
+      }
+      case 'cane': {
+        if (below === B.SUGAR_CANE) return true;
+        if (!SOIL.has(below) && below !== B.SAND) return false;
         for (const [dx, , dz] of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
-          if (IS_OPAQUE[Math.max(0, this.getBlock(x + dx, y, z + dz))]) return true;
+          const n = this.getBlock(x + dx, y - 1, z + dz);
+          if (n === B.WATER || n === B.ICE || n < 0) return true;
         }
         return false;
       }
+      case 'mushroom': return IS_OPAQUE[below] === 1;
       default: return true;
     }
+  }
+
+  // Opens or closes a door (both halves). Returns the new open state.
+  toggleDoor(x, y, z) {
+    const meta = this.getMeta(x, y, z);
+    const open = !(meta & 4);
+    const oy = meta & 8 ? y - 1 : y + 1;
+    this.setBlock(x, y, z, B.OAK_DOOR, { meta: open ? meta | 4 : meta & ~4, update: false });
+    if (this.getBlock(x, oy, z) === B.OAK_DOOR) {
+      const om = this.getMeta(x, oy, z);
+      this.setBlock(x, oy, z, B.OAK_DOOR, { meta: open ? om | 4 : om & ~4, update: false });
+    }
+    return open;
   }
 
   // Removes a block, optionally dropping its items as if broken by hand.
@@ -528,6 +600,13 @@ export class World {
         else if (!wet && this.getBlock(x, y + 1, z) !== B.WHEAT && r() < 0.1) this.setBlock(x, y, z, B.DIRT);
         break;
       }
+      case B.SUGAR_CANE:
+        if (this.getBlock(x, y + 1, z) === 0 && r() < 0.06) {
+          let h = 1;
+          while (this.getBlock(x, y - h, z) === B.SUGAR_CANE) h++;
+          if (h < 3) this.setBlock(x, y + 1, z, B.SUGAR_CANE);
+        }
+        break;
       case B.CACTUS:
         if (this.getBlock(x, y + 1, z) === 0 && r() < 0.06) {
           let h = 1;
