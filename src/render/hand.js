@@ -1,8 +1,8 @@
 // First-person arm / held item, rendered in its own scene on top of the world.
 // Like Minecraft 1.9+, the bare arm shows when the hand is empty; held items float on their own.
 import * as THREE from 'three';
-import { makeItemMesh, isCubeItem } from './itemModels.js';
-import { getItem } from '../items.js';
+import { makeItemMesh, isCubeItem, bowMesh } from './itemModels.js';
+import { getItem, I } from '../items.js';
 import { skinBox, getSkinTexture } from './skin.js';
 
 // Pose of the empty arm: shoulder position and the direction the arm points in.
@@ -44,10 +44,11 @@ export class Hand {
     if (this.swing < 0 || this.swing > 0.5) this.swing = 0;
   }
 
-  setItem(id) {
-    if (id === this.heldId) return;
+  setItem(id, pull = 0) {
+    if (id === this.heldId && pull === this.pull) return;
+    if (id !== this.heldId) this.equip = 0;
     this.heldId = id;
-    this.equip = 0;
+    this.pull = pull;
     if (this.mesh) {
       this.root.remove(this.mesh);
       if (this.mesh !== this.arm) this.mesh.material.dispose(); // geometries are shared
@@ -59,11 +60,17 @@ export class Hand {
       this.mesh.scale.setScalar(0.36);
       this.mesh.position.set(0.54, -0.4, -0.8);
       this.mesh.rotation.set(0.1, Math.PI / 4, 0);
+    } else if (id === I.BOW && pull > 0) {
+      // Drawn bow held up in the middle of the view.
+      this.mesh = bowMesh(pull);
+      this.mesh.scale.setScalar(0.6);
+      this.mesh.position.set(0.12, -0.2, -0.6);
+      this.mesh.rotation.set(0.2, 0.8, 0.25, 'YXZ');
     } else {
       this.mesh = makeItemMesh(id);
       const it = getItem(id);
-      const tool = !!(it && it.tool);
-      this.mesh.scale.setScalar(tool ? 0.68 : 0.52);
+      const tool = !!(it && (it.tool || it.bow));
+      this.mesh.scale.setScalar(it && it.bow ? 0.55 : tool ? 0.68 : 0.52);
       this.mesh.position.set(0.56, tool ? -0.3 : -0.36, -0.78);
       // Seen from behind (mirrored) so the head of a tool points up and to the left.
       this.mesh.rotation.set(-0.15, Math.PI + 0.1, tool ? 0.12 : 0, 'YXZ');
@@ -71,9 +78,10 @@ export class Hand {
     this.root.add(this.mesh);
   }
 
-  update(dt, { heldId, bobPhase, bobAmount, light, eating }) {
+  update(dt, { heldId, bobPhase, bobAmount, light, eating, bowPull = -1 }) {
     this.time += dt;
-    this.setItem(heldId || 0);
+    const pull = bowPull < 0 ? 0 : bowPull < 0.65 ? 1 : bowPull < 0.9 ? 2 : 3;
+    this.setItem(heldId || 0, pull);
     if (this.swing >= 0) {
       this.swing += dt / 0.3;
       if (this.swing >= 1) this.swing = -1;
@@ -95,8 +103,13 @@ export class Hand {
       r.position.y += 0.12 + Math.sin(this.time * 25) * 0.025;
       r.rotation.x += 0.4;
     }
+    if (pull === 3) {
+      // Full draw: the bow trembles.
+      r.position.x += Math.sin(this.time * 40) * 0.004;
+      r.position.y += Math.cos(this.time * 33) * 0.004;
+    }
     const b = Math.max(0.1, light);
-    if (empty) this.armMat.color.setScalar(b);
+    if (empty) this.armMat.color.setScalar(Math.min(1.25, b * 1.2));
     else if (this.mesh) this.mesh.material.color.setScalar(b);
   }
 }

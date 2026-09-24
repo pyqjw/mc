@@ -66,9 +66,10 @@ export class Inventory {
     const s = this.slots[this.selected];
     if (!s) return false;
     const it = getItem(s.id);
-    if (!it || !it.tool) return false;
+    const max = it && (it.tool ? it.tool.durability : it.durability);
+    if (!max) return false;
     s.damage = (s.damage || 0) + amount;
-    if (s.damage >= it.tool.durability) {
+    if (s.damage >= max) {
       this.slots[this.selected] = null;
       return true;
     }

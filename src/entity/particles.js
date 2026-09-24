@@ -82,6 +82,30 @@ export class Particles {
     }
   }
 
+  // Green sparkles (bone meal).
+  happy(x, y, z) {
+    for (let i = 0; i < 12; i++) {
+      const mat = this.smokeMat.clone();
+      mat.color.setHex(Math.random() < 0.5 ? 0x7cff5a : 0x3ecf2a);
+      const mesh = new THREE.Mesh(this.plane, mat);
+      mesh.scale.setScalar(0.08 + Math.random() * 0.06);
+      mesh.position.set(x + (Math.random() - 0.5) * 1.2, y + Math.random() * 0.6, z + (Math.random() - 0.5) * 1.2);
+      const vel = new THREE.Vector3(0, 0.3 + Math.random() * 0.4, 0);
+      this.add({ mesh, vel, life: 0.8 + Math.random() * 0.6, maxLife: 1.2, gravity: 0, ownMat: true, fade: true });
+    }
+  }
+
+  // White arc in front of the player for a sword sweep.
+  sweep(x, y, z, yaw) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide });
+    const g = new THREE.RingGeometry(0.7, 1.0, 12, 1, Math.PI * 0.15, Math.PI * 0.7);
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(0, yaw, 0);
+    mesh.rotateX(-Math.PI / 2);
+    this.add({ mesh, vel: new THREE.Vector3(), life: 0.25, maxLife: 0.3, gravity: 0, ownMat: true, ownGeo: true, fade: true, keepRotation: true });
+  }
+
   poof(x, y, z) {
     this.smoke(x, y, z, 14, 0xeeeeee, 0.35, 2, 0.8);
   }
@@ -114,7 +138,7 @@ export class Particles {
         }
       }
       if (p.fade) m.material.opacity = Math.min(1, p.life / (p.maxLife * 0.5)) * 0.8;
-      m.quaternion.copy(cam.quaternion);
+      if (!p.keepRotation) m.quaternion.copy(cam.quaternion);
     }
   }
 }

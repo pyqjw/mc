@@ -8,11 +8,13 @@ import { WORLD_HEIGHT } from './constants.js';
 import { Player } from './entity/player.js';
 import { MobManager } from './entity/mobs.js';
 import { DropManager } from './entity/drops.js';
+import { XpOrbManager } from './entity/xporbs.js';
+import { ProjectileManager } from './entity/projectiles.js';
 import { Particles } from './entity/particles.js';
 import { Hand } from './render/hand.js';
 import { HUD } from './ui/hud.js';
 import { Screens } from './ui/screens.js';
-import { getItem, I, ITEMS } from './items.js';
+import { getItem, I, ITEMS, HAND_ATTACK_SPEED } from './items.js';
 import { blockSound } from './audio/sounds.js';
 import { BIOMES } from './world/generator.js';
 
@@ -20,6 +22,8 @@ const REACH = 4.5;
 const ENTITY_REACH = 3;
 
 const DEATH_MESSAGES = {
+  arrow: '被骷髅射杀了',
+  poison: '中毒身亡',
   fall: '从高处摔了下来',
   lava: '试图在熔岩里游泳',
   drown: '淹死了',
@@ -69,6 +73,8 @@ export class Game {
     this.player = new Player(this);
     this.mobs = new MobManager(this);
     this.drops = new DropManager(this);
+    this.xpOrbs = new XpOrbManager(this);
+    this.projectiles = new ProjectileManager(this);
     this.particles = new Particles(this);
     this.hand = new Hand();
     this.hand.resize(window.innerWidth, window.innerHeight);
@@ -164,6 +170,8 @@ export class Game {
       this.interact(dt, active);
       this.mobs.update(dt);
       this.drops.update(dt);
+      this.xpOrbs.update(dt);
+      this.projectiles.update(dt);
       this.particles.update(dt);
       this.updateSleep(dt);
     }
@@ -179,7 +187,11 @@ export class Game {
       eye.z - Math.sin(player.yaw) * Math.sin(player.bobPhase) * 0.05 * bob,
     );
     cam.rotation.set(player.pitch, player.yaw, player.hurtTime > 0 ? Math.sin(player.hurtTime * 9) * 0.06 : 0);
-    const fovTarget = this.settings.fov * (player.sprinting ? 1.12 : 1);
+    let fovTarget = this.settings.fov * (player.sprinting ? 1.12 : 1);
+    if (this.usingItem && this.usingItem.bow) {
+      const f = Math.min(1, this.useTime);
+      fovTarget *= 1 - f * f * 0.15;
+    }
     cam.fov += (fovTarget - cam.fov) * Math.min(1, dt * 10);
     cam.updateProjectionMatrix();
 
@@ -194,7 +206,8 @@ export class Game {
     const light = this.world.getLight(Math.floor(eye.x), Math.floor(eye.y), Math.floor(eye.z));
     const lb = Math.max(0.1, light / 15);
     this.hand.update(dt, {
-      heldId: hand ? hand.id : 0, bobPhase: player.bobPhase, bobAmount: bob, light: lb * lb * 0.5 + lb * 0.5, eating: !!this.usingItem,
+      heldId: hand ? hand.id : 0, bobPhase: player.bobPhase, bobAmount: bob, light: lb * lb * 0.5 + lb * 0.5,
+      eating: !!this.usingItem && !this.usingItem.bow, bowPull: this.usingItem && this.usingItem.bow ? this.useTime : -1,
     });
 
     this.renderer.render(this.settings.hideHud ? null : this.hand.scene, this.hand.camera);
@@ -242,7 +255,7 @@ export class Game {
     if (!active) {
       this.mining = null;
       this.renderer.setCrack(null);
-      this.stopUsing();
+      this.cancelUsing();
       return;
     }
 
@@ -257,10 +270,12 @@ export class Game {
       }
     }
 
-    // Attack / mine.
+    // Attack / mine. Every swing restarts the attack cooldown (Minecraft 1.9+ combat).
+    player.attackTimer += dt;
     if (input.clicked.has(0)) {
       this.hand.startSwing();
       if (targetMob) this.attack(targetMob);
+      player.attackTimer = 0;
     }
     if (input.buttons.has(0) && !targetMob && hit && this.miningCooldown <= 0) {
       const same = this.mining && this.mining.x === hit.x && this.mining.y === hit.y && this.mining.z === hit.z && this.mining.id === hit.id;
@@ -336,6 +351,11 @@ export class Game {
       if (below > 0 && below !== B.AIR) world.setBlock(x, y, z, B.WATER);
     }
     this.spawnBlockDrops(x, y, z, id, meta, tool);
+    const bxp = BLOCKS[id].xp;
+    if (bxp && (BLOCKS[id].harvestLevel < 0 || (tool && tool.type === 'pickaxe' && tool.tier >= BLOCKS[id].harvestLevel))) {
+      const n = bxp[0] + Math.floor(Math.random() * (bxp[1] - bxp[0] + 1));
+      if (n > 0) this.xpOrbs.spawn(x + 0.5, y + 0.5, z + 0.5, n);
+    }
     if (tool && BLOCKS[id].hardness > 0) {
       if (this.player.inventory.damageHand(tool.type === 'sword' ? 2 : 1)) this.sound('break_tool');
     }
@@ -352,20 +372,46 @@ export class Game {
     }
   }
 
+  // Attack strength 0..1 from the time since the last swing and the held item's attack speed.
+  attackStrength() {
+    const s = this.player.inventory.hand;
+    const tool = s ? getItem(s.id)?.tool : null;
+    const speed = tool ? tool.attackSpeed : HAND_ATTACK_SPEED;
+    return Math.min(1, (this.player.attackTimer + 0.025) * speed);
+  }
+
   attack(mob) {
     const player = this.player;
     const s = player.inventory.hand;
     const tool = s ? getItem(s.id)?.tool : null;
-    let dmg = tool ? tool.damage : 1;
-    const crit = player.vel.y < 0 && !player.onGround && !player.inWater;
+    const strength = this.attackStrength();
+    const full = strength > 0.9;
+    let dmg = (tool ? tool.damage : 1) * (0.2 + strength * strength * 0.8);
+    const crit = full && player.vel.y < 0 && !player.onGround && !player.inWater && !player.sprinting;
+    const knockSprint = full && player.sprinting;
+    const sweep = full && !crit && !knockSprint && player.onGround && tool && tool.type === 'sword';
     if (crit) {
       dmg *= 1.5;
-      this.particles.smoke(mob.pos.x, mob.pos.y + mob.height * 0.7, mob.pos.z, 6, 0xffffaa, 0.12, 3, 0.4);
+      for (let i = 0; i < 3; i++) this.particles.smoke(mob.pos.x, mob.pos.y + mob.height * 0.7, mob.pos.z, 4, 0xffffaa, 0.1, 3, 0.4);
     }
-    if (mob.damage(dmg, player.pos, player.sprinting ? 1.6 : 1)) {
+    mob.lastHurtByPlayer = this.time;
+    if (mob.damage(dmg, player.pos, knockSprint ? 1.6 : full ? 1 : 0.5)) {
       if (tool && player.inventory.damageHand(tool.type === 'sword' ? 1 : 2)) this.sound('break_tool');
       player.exhaustion += 0.1;
       if (player.sprinting) player.sprinting = false;
+      const snd = crit ? 'attack.crit' : knockSprint ? 'attack.knockback' : sweep ? 'attack.sweep' : full ? 'attack.strong' : 'attack.weak';
+      this.sound(snd, mob.pos.x, mob.pos.y + 1, mob.pos.z);
+    }
+    if (sweep) {
+      const p = mob.pos;
+      for (const m of this.mobs.inBox(p.x - 1, p.y - 0.25, p.z - 1, p.x + 1, p.y + mob.height + 0.25, p.z + 1)) {
+        if (m === mob || m.pos.distanceTo(player.pos) > 3) continue;
+        m.lastHurtByPlayer = this.time;
+        m.damage(1, player.pos, 0.4);
+      }
+      const eye = player.eyePos(new THREE.Vector3());
+      const dir = player.lookDir(new THREE.Vector3());
+      this.particles.sweep(eye.x + dir.x * 1.4, eye.y - 0.4 + dir.y * 1.4, eye.z + dir.z * 1.4, player.yaw);
     }
   }
 
@@ -397,6 +443,38 @@ export class Game {
 
     if (item.bucket) {
       this.useBucket(item, eye, dir);
+      return;
+    }
+
+    if (item.bow) {
+      if (this.findArrow() >= 0) {
+        this.usingItem = { id: s.id, slot: inv.selected, bow: true };
+        this.useTime = 0;
+      }
+      return;
+    }
+
+    if (item.throwable) {
+      const pos = eye.clone().addScaledVector(dir, 0.3);
+      this.projectiles.shoot(pos, dir.clone().multiplyScalar(30).add(player.vel), { kind: 'egg', shooter: 'player' });
+      this.sound('throw', eye.x, eye.y, eye.z, 0.6, 1 / (Math.random() * 0.4 + 0.8));
+      inv.consumeHand(1);
+      this.hand.startSwing();
+      return;
+    }
+
+    if (item.armor) {
+      const old = player.equip(s);
+      inv.slots[inv.selected] = old;
+      this.hand.startSwing();
+      return;
+    }
+
+    if (s.id === I.BONE_MEAL && hit) {
+      if (this.useBoneMeal(hit.x, hit.y, hit.z)) {
+        inv.consumeHand(1);
+        this.hand.startSwing();
+      }
       return;
     }
 
@@ -542,10 +620,12 @@ export class Game {
     const inv = this.player.inventory;
     const s = inv.hand;
     if (!s || s.id !== this.usingItem.id || inv.selected !== this.usingItem.slot) {
-      this.stopUsing();
+      this.usingItem = null;
+      this.useTime = 0;
       return;
     }
     this.useTime += dt;
+    if (this.usingItem.bow) return;
     if (Math.floor(this.useTime / 0.22) !== Math.floor((this.useTime - dt) / 0.22)) {
       this.sound('eat');
     }
@@ -560,8 +640,81 @@ export class Game {
   }
 
   stopUsing() {
+    if (this.usingItem && this.usingItem.bow) this.releaseBow();
+    this.cancelUsing();
+  }
+
+  // Stops eating / drawing without effect (screens opened, death).
+  cancelUsing() {
     this.usingItem = null;
     this.useTime = 0;
+  }
+
+  // Index of the first arrow stack in the inventory, or -1.
+  findArrow() {
+    const slots = this.player.inventory.slots;
+    const h = this.player.inventory.selected;
+    // Minecraft looks at the hands first, then the hotbar, then the rest.
+    if (slots[h] && slots[h].id === I.ARROW) return h;
+    return slots.findIndex((s) => s && s.id === I.ARROW);
+  }
+
+  // Fires the bow with power from the draw time (Minecraft's curve).
+  releaseBow() {
+    const player = this.player;
+    const inv = player.inventory;
+    const t = this.useTime;
+    this.usingItem = null;
+    this.useTime = 0;
+    let f = Math.min(1, t);
+    f = (f * f + f * 2) / 3;
+    if (f < 0.1) return;
+    const ai = this.findArrow();
+    if (ai < 0) return;
+    const eye = player.eyePos(new THREE.Vector3());
+    const dir = player.lookDir(new THREE.Vector3());
+    const vel = dir.clone().multiplyScalar(f * 60).add(new THREE.Vector3(player.vel.x, player.onGround ? 0 : player.vel.y, player.vel.z));
+    this.projectiles.shoot(eye.clone().addScaledVector(dir, 0.2).setY(eye.y - 0.1), vel, {
+      kind: 'arrow', shooter: 'player', damage: 2, crit: f >= 1, pickup: true,
+    });
+    this.sound('bow', eye.x, eye.y, eye.z, 1, 1 / (Math.random() * 0.4 + 1.2) + f * 0.5);
+    const a = inv.slots[ai];
+    a.count--;
+    if (a.count <= 0) inv.slots[ai] = null;
+    if (inv.damageHand(1)) this.sound('break_tool');
+  }
+
+  // Bone meal: grows crops and saplings, or sprouts grass and flowers. Returns true if used.
+  useBoneMeal(x, y, z) {
+    const world = this.world;
+    const id = world.getBlock(x, y, z);
+    const b = BLOCKS[id];
+    let used = false;
+    if (id === B.WHEAT) {
+      const m = world.getMeta(x, y, z);
+      if (m < 7) {
+        world.setMeta(x, y, z, Math.min(7, m + 2 + Math.floor(Math.random() * 4)));
+        used = true;
+      }
+    } else if (b && b.sapling) {
+      used = true;
+      if (Math.random() < 0.45) world.growTree(x, y, z, b.sapling);
+    } else if (id === B.GRASS && world.getBlock(x, y + 1, z) === 0) {
+      used = true;
+      for (let i = 0; i < 40; i++) {
+        const tx = x + Math.floor(Math.random() * 7) - 3;
+        const tz = z + Math.floor(Math.random() * 7) - 3;
+        const ty = y + Math.floor(Math.random() * 3) - 1;
+        if (world.getBlock(tx, ty, tz) !== B.GRASS || world.getBlock(tx, ty + 1, tz) !== 0) continue;
+        const r = Math.random();
+        world.setBlock(tx, ty + 1, tz, r < 0.85 ? B.TALL_GRASS : r < 0.93 ? B.DANDELION : B.POPPY);
+      }
+    }
+    if (used) {
+      this.particles.happy(x + 0.5, y + 0.6, z + 0.5);
+      this.sound('bone_meal', x + 0.5, y + 0.5, z + 0.5);
+    }
+    return used;
   }
 
   // ------------------------------------------------------------------ entities & world callbacks
@@ -732,7 +885,7 @@ export class Game {
   // ------------------------------------------------------------------ screens & death
   openScreen(kind, data) {
     this.screens.open(kind, data);
-    this.stopUsing();
+    this.cancelUsing();
     this.mining = null;
     this.input.unlock();
   }
@@ -744,6 +897,16 @@ export class Game {
 
   onPlayerDeath(cause) {
     const p = this.player;
+    this.cancelUsing();
+    for (let i = 0; i < 4; i++) {
+      if (!p.armor[i]) continue;
+      const vel = new THREE.Vector3((Math.random() - 0.5) * 5, 3 + Math.random() * 2, (Math.random() - 0.5) * 5);
+      this.dropItem(p.pos.x, p.pos.y + 1, p.pos.z, p.armor[i], vel, 1);
+      p.armor[i] = null;
+    }
+    const xp = p.deathXp();
+    if (xp > 0) this.xpOrbs.spawn(p.pos.x, p.pos.y + 0.5, p.pos.z, xp);
+    this.finalScore = p.score;
     for (let i = 0; i < p.inventory.slots.length; i++) {
       const s = p.inventory.slots[i];
       if (!s) continue;
@@ -761,7 +924,7 @@ export class Game {
     const el = document.getElementById('death');
     el.style.display = 'flex';
     document.getElementById('death-cause').textContent = `玩家${DEATH_MESSAGES[this.deathCause] || '死了'}`;
-    document.querySelector('#death-score span').textContent = String(this.player.score || 0);
+    document.querySelector('#death-score span').textContent = String(this.finalScore ?? this.player.score ?? 0);
   }
 
   respawn() {
@@ -810,6 +973,8 @@ export class Game {
     this.audio.setEnvironment(null);
     this.mobs.clear();
     this.drops.clear();
+    this.xpOrbs.clear();
+    this.projectiles.clear();
     this.particles.clear();
     this.world.dispose();
     this.screens.destroy();

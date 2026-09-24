@@ -1,7 +1,7 @@
 // Procedural 16x16 pixel-art textures: the block atlas, item sprites and crack overlays.
 import { TILES, TILE_INDEX, ATLAS_TILES_PER_ROW, BLOCKS } from '../world/blocks.js';
 import { mulberry32 } from '../world/noise.js';
-import { ITEMS, TOOL_MATERIALS } from '../items.js';
+import { ITEMS, TOOL_MATERIALS, ARMOR_MATERIALS } from '../items.js';
 import { ITEM_GRASS, ITEM_FOLIAGE, ITEM_WATER } from '../world/biomeColors.js';
 
 const T = 16;
@@ -783,6 +783,145 @@ function tool(p, type, color) {
   }
 }
 
+
+// Paints a sprite from string rows using a palette of characters ('.' = transparent).
+function pixmap(p, rows, pal) {
+  for (let y = 0; y < rows.length; y++) {
+    for (let x = 0; x < rows[y].length; x++) {
+      const c = pal[rows[y][x]];
+      if (c) p.px(x, y, c);
+    }
+  }
+}
+
+const ARMOR_SHAPES = [
+  [ // helmet
+    '................',
+    '................',
+    '................',
+    '....oooooooo....',
+    '...oLLLLLLXXo...',
+    '..oLXXXXXXXXDo..',
+    '..oLXXXXXXXXDo..',
+    '..oXXooooooXDo..',
+    '..oXDo....oXDo..',
+    '..oXDo....oXDo..',
+    '..oooo....oooo..',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+  [ // chestplate
+    '................',
+    '..oooo....oooo..',
+    '.oLXXXo..oXXXDo.',
+    '.oLXXXXooXXXXDo.',
+    '.oLXXXXXXXXXXDo.',
+    '.oooLXXXXXXDooo.',
+    '...oLXXXXXXDo...',
+    '...oLXXXXXXDo...',
+    '...oLXXXXXXDo...',
+    '...oLXXXXXXDo...',
+    '...oLXXXXXXDo...',
+    '...oLDDDDDDDo...',
+    '...oooooooooo...',
+    '................',
+    '................',
+    '................',
+  ],
+  [ // leggings
+    '................',
+    '...oooooooooo...',
+    '...oLXXXXXXDo...',
+    '...oLXXXXXXDo...',
+    '...oLXDooLXDo...',
+    '...oLXDooLXDo...',
+    '...oLXDooLXDo...',
+    '...oLXDooLXDo...',
+    '...oLXDooLXDo...',
+    '...oLXDooLXDo...',
+    '...oLXDooLXDo...',
+    '...oLXDooLXDo...',
+    '...oooooooooo...',
+    '................',
+    '................',
+    '................',
+  ],
+  [ // boots
+    '................',
+    '................',
+    '................',
+    '................',
+    '..oooo....oooo..',
+    '..oLXo....oLXo..',
+    '..oLXo....oLXo..',
+    '..oLXo....oLXo..',
+    'ooLXXo....oLXXoo',
+    'oLXXDo....oLXXDo',
+    'oooooo....oooooo',
+    '................',
+    '................',
+    '................',
+    '................',
+    '................',
+  ],
+];
+
+function armorSprite(p, slot, color) {
+  pixmap(p, ARMOR_SHAPES[slot], { X: color, L: mul(color, 1.2), D: mul(color, 0.7), o: mul(color, 0.35) });
+}
+
+// Faint silhouette shown in empty armour slots.
+export function armorSlotCanvas(slot) {
+  const key = `slot:${slot}`;
+  if (itemCanvasCache.has(key)) return itemCanvasCache.get(key);
+  const c = makeCanvas(T, T);
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(T, T);
+  pixmap(new Painter(img.data, T, 0, 0, Math.random), ARMOR_SHAPES[slot], { o: [60, 60, 60, 150], X: [120, 120, 120, 90], L: [130, 130, 130, 90], D: [110, 110, 110, 90] });
+  ctx.putImageData(img, 0, 0);
+  itemCanvasCache.set(key, c);
+  return c;
+}
+
+// Bow; pull 0..3 draws the string back with an arrow nocked.
+function bow(p, pull) {
+  const wood = [120, 82, 40];
+  const woodL = [160, 116, 62];
+  for (let a = Math.PI; a <= Math.PI * 1.5 + 0.001; a += 0.02) {
+    const x = Math.round(13 + 11.5 * Math.cos(a));
+    const y = Math.round(13 + 11.5 * Math.sin(a));
+    p.px(x, y, woodL);
+    p.px(x + 1, y + 1, wood);
+  }
+  const mid = 7 + pull * 1.4;
+  const str = [210, 210, 210];
+  p.line(12, 2, Math.round(mid), Math.round(mid), str);
+  p.line(Math.round(mid), Math.round(mid), 2, 12, str);
+  if (pull > 0) {
+    const back = Math.round(mid);
+    p.line(back - 1, back - 1, Math.max(2, back - 9), Math.max(2, back - 9), [110, 80, 45]);
+    p.px(Math.max(1, back - 10), Math.max(1, back - 10), [140, 140, 140]);
+    p.px(Math.max(2, back - 9), Math.max(1, back - 10), [110, 110, 110]);
+    p.px(back, back, [235, 235, 235]);
+    p.px(back + 1, back, [200, 200, 200]);
+  }
+}
+
+export function getBowCanvas(pull) {
+  const key = `bow:${pull}`;
+  if (itemCanvasCache.has(key)) return itemCanvasCache.get(key);
+  const c = makeCanvas(T, T);
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(T, T);
+  bow(new Painter(img.data, T, 0, 0, mulberry32(pull)), pull);
+  ctx.putImageData(img, 0, 0);
+  itemCanvasCache.set(key, c);
+  return c;
+}
+
 const ITEM_PAINTERS = {
   stick: (p) => handle(p, 4, 12, 11, 5),
   coal: (p, r) => blob(p, 7.5, 8, 5, [40, 40, 40], r),
@@ -824,6 +963,76 @@ const ITEM_PAINTERS = {
   flint: (p, r) => { for (let y = 3; y < 13; y++) { const w = Math.round(4 - Math.abs(y - 7) * 0.5); for (let x = 7 - w; x <= 7 + w; x++) p.px(x, y, mul([60, 60, 62], 0.8 + r() * 0.5)); } },
   wheat_seeds: (p, r) => { for (let i = 0; i < 7; i++) { const x = 3 + Math.floor(r() * 10); const y = 4 + Math.floor(r() * 9); p.px(x, y, [70, 150, 40]); p.px(x, y + 1, [50, 110, 30]); } },
   wheat: (p) => { for (let i = 0; i < 5; i++) { p.line(3 + i * 2, 14, 6 + i, 3, [200, 170, 60]); p.px(6 + i, 3, [230, 200, 90]); p.px(6 + i, 4, [230, 200, 90]); } p.line(4, 10, 12, 10, [140, 110, 40]); },
+
+  bone: (p) => {
+    const W = [236, 232, 214];
+    const S = [196, 190, 170];
+    p.line(4, 11, 11, 4, W);
+    p.line(5, 11, 11, 5, S);
+    for (const [x, y] of [[2, 11], [4, 13], [11, 2], [13, 4]]) { p.rect(x, y, x + 1, y + 1, W); p.px(x + 1, y + 1, S); }
+    p.rect(3, 12, 4, 12, W);
+    p.rect(12, 3, 12, 4, W);
+  },
+  bone_meal: (p, r) => {
+    for (let i = 0; i < 70; i++) {
+      const x = 3 + Math.floor(r() * 10);
+      const y = 7 + Math.floor(r() * 7);
+      if (Math.abs(x - 7.5) / 5 + (13 - y) / 7 > 1.05) continue;
+      p.px(x, y, r() < 0.3 ? [205, 203, 196] : [243, 242, 236]);
+    }
+  },
+  string: (p) => {
+    const c = [225, 225, 225];
+    let px = 2;
+    let py = 13;
+    for (let i = 0; i <= 22; i++) {
+      const t = i / 22;
+      const x = Math.round(2 + t * 11 + Math.sin(t * 9) * 1.2);
+      const y = Math.round(13 - t * 11 + Math.cos(t * 9) * 1.2);
+      p.line(px, py, x, y, c);
+      px = x;
+      py = y;
+    }
+  },
+  feather: (p) => {
+    p.line(3, 13, 12, 4, [150, 140, 120]);
+    for (let i = 0; i < 8; i++) {
+      const x = 5 + i;
+      const y = 11 - i;
+      p.px(x - 1, y - 1, [245, 245, 245]);
+      p.px(x + 1, y + 1, [220, 220, 220]);
+      if (i > 1 && i < 7) { p.px(x - 2, y - 1, [230, 230, 230]); p.px(x + 1, y + 2, [205, 205, 205]); }
+    }
+    p.px(12, 3, [245, 245, 245]);
+  },
+  arrow: (p) => {
+    p.line(3, 12, 11, 4, [110, 80, 45]);
+    p.line(4, 12, 11, 5, [80, 58, 32]);
+    p.rect(11, 2, 12, 3, [150, 150, 150]);
+    p.px(13, 2, [95, 95, 95]);
+    p.px(12, 4, [95, 95, 95]);
+    p.px(11, 4, [120, 120, 120]);
+    for (const [x, y] of [[1, 12], [2, 11], [2, 13], [3, 14], [1, 14], [2, 12]]) p.px(x, y, [235, 235, 235]);
+    p.px(1, 13, [200, 200, 200]);
+    p.px(3, 13, [200, 200, 200]);
+  },
+  bow: (p) => bow(p, 0),
+  egg: (p, r) => {
+    for (let y = 2; y < 15; y++) for (let x = 3; x < 13; x++) {
+      const d = Math.hypot((x - 7.5) / 4.6, (y - 8.8) / (y < 9 ? 6.4 : 5.6));
+      if (d > 1) continue;
+      p.px(x, y, d > 0.86 ? [196, 175, 130] : r() < 0.08 ? [205, 180, 140] : mul([242, 228, 196], 0.94 + r() * 0.08));
+    }
+    p.px(6, 5, [255, 250, 235]);
+  },
+  chicken: (p, r) => meat(p, [238, 176, 164], [250, 222, 212], r),
+  cooked_chicken: (p, r) => meat(p, [196, 128, 64], [150, 92, 42], r),
+  spider_eye: (p, r) => {
+    blob(p, 7.5, 8, 5.5, [150, 26, 30], r);
+    blob(p, 7.5, 8.5, 2.2, [60, 8, 12], r);
+    p.px(5, 5, [230, 120, 120]);
+    p.px(6, 5, [210, 90, 90]);
+  },
   bread: (p, r) => { for (let y = 5; y < 12; y++) for (let x = 1; x < 15; x++) { const d = Math.hypot((x - 7.5) / 7, (y - 8.5) / 3.6); if (d <= 1) p.px(x, y, d > 0.8 ? [130, 80, 30] : mul(y < 7 ? [190, 130, 55] : [170, 110, 45], 0.9 + r() * 0.2)); } },
 };
 
@@ -841,6 +1050,8 @@ export function getItemCanvas(id) {
   if (it && it.tool) {
     const mat = TOOL_MATERIALS.find((m) => m.key === it.tool.material);
     tool(p, it.tool.type, mat.color);
+  } else if (it && it.armor) {
+    armorSprite(p, it.armor.slot, ARMOR_MATERIALS.find((m) => m.key === it.armor.material).color);
   } else if (it && ITEM_PAINTERS[it.key]) {
     ITEM_PAINTERS[it.key](p, rand);
   } else {

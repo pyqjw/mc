@@ -1,5 +1,5 @@
 // Voxel ray casting (Amanatides & Woo) with per-block selection boxes.
-import { BLOCKS, RENDER, IS_FLUID, B } from './blocks.js';
+import { BLOCKS, RENDER, IS_FLUID, IS_SOLID, B } from './blocks.js';
 
 // Selection / hit box of a block in local block coordinates.
 export function blockBox(id, meta) {
@@ -39,7 +39,7 @@ function rayBox(ox, oy, oz, dx, dy, dz, box) {
 const FACE_NORMALS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
 // Returns { x, y, z, id, meta, normal:[nx,ny,nz], dist } or null.
-// opts.fluids: also hit fluid source blocks (for buckets).
+// opts.fluids: also hit fluid source blocks (for buckets). opts.solid: only hit solid blocks.
 export function raycast(world, origin, dir, maxDist, opts = {}) {
   let x = Math.floor(origin.x);
   let y = Math.floor(origin.y);
@@ -63,7 +63,7 @@ export function raycast(world, origin, dir, maxDist, opts = {}) {
       const meta = world.getMeta(x, y, z);
       let hit = false;
       if (IS_FLUID[id]) hit = !!opts.fluids && meta === 0;
-      else hit = true;
+      else hit = !opts.solid || IS_SOLID[id] === 1;
       if (hit) {
         const box = IS_FLUID[id] ? [0, 0, 0, 1, 1, 1] : blockBox(id, meta);
         const r = rayBox(origin.x - x, origin.y - y, origin.z - z, dir.x, dir.y, dir.z, box);

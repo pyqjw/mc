@@ -12,11 +12,11 @@ function el(tag, cls, parent) {
 }
 
 export function renderStack(slotEl, stack) {
-  let img = slotEl.querySelector('img');
+  let img = slotEl.querySelector('img.item');
   let cnt = slotEl.querySelector('.count');
   let dur = slotEl.querySelector('.dur');
   if (!img) {
-    img = el('img', '', slotEl);
+    img = el('img', 'item', slotEl);
     img.draggable = false;
     cnt = el('span', 'count', slotEl);
     dur = el('div', 'dur', slotEl);
@@ -33,7 +33,7 @@ export function renderStack(slotEl, stack) {
   }
   img.style.display = '';
   img.src = itemIconURL(stack.id);
-  img.className = isIsoIcon(stack.id) ? 'iso' : 'flat';
+  img.className = isIsoIcon(stack.id) ? 'item iso' : 'item flat';
   cnt.textContent = stack.count > 1 ? String(stack.count) : '';
   const it = getItem(stack.id);
   const maxDur = it && (it.tool ? it.tool.durability : it.durability);
@@ -55,6 +55,8 @@ export class HUD {
     this.root = root;
     root.innerHTML = '';
     this.crosshair = el('div', 'crosshair', root);
+    this.attackIndicator = el('div', 'attack-indicator', root);
+    this.attackFill = el('div', '', this.attackIndicator);
     this.vignette = el('div', 'vignette', root);
     this.waterOverlay = el('div', 'water-overlay', root);
     this.sleepOverlay = el('div', 'sleep-overlay', root);
@@ -155,14 +157,15 @@ export class HUD {
     if (this.hurtFlash > 0) this.hurtFlash -= dt;
     const flash = this.hurtFlash > 0 && Math.floor(this.hurtFlash * 6.6) % 2 === 1;
     const tick = Math.floor(this.ticker * 20);
-    const regen = p.regenTicks > 0 || (p.food >= 18 && p.health < 20);
+    const regen = p.hasEffect('regeneration');
+    const poison = p.hasEffect('poison') ? 'heartPoison' : null;
     for (let i = 0; i < 10; i++) {
       const v = hp - i * 2;
       const state = v >= 2 ? 'full' : v === 1 ? 'half' : 'empty';
       let dy = 0;
       if (hp <= 4) dy = ((tick * 7 + i * 13) % 3) - 1;
-      if (regen && p.regenTicks > 0 && i === tick % 25) dy -= 2;
-      this.setIcon(this.heartRow.icons[i], iconURL('heart', state, flash), dy);
+      if (regen && i === tick % 25) dy -= 2;
+      this.setIcon(this.heartRow.icons[i], iconURL('heart', state, flash, poison), dy);
     }
 
     const food = p.food;
@@ -170,7 +173,7 @@ export class HUD {
       const v = food - i * 2;
       const state = v >= 2 ? 'full' : v === 1 ? 'half' : 'empty';
       const shake = p.saturation <= 0 && (tick + i * 7) % (food * 3 + 1) === 0 ? ((tick + i) % 3) - 1 : 0;
-      this.setIcon(this.foodRow.icons[i], iconURL('food', state), shake);
+      this.setIcon(this.foodRow.icons[i], iconURL('food', state, false, p.hasEffect('hunger') ? 'foodHunger' : null), shake);
     }
 
     const armor = p.armorPoints ? p.armorPoints() : 0;
@@ -194,6 +197,12 @@ export class HUD {
         this.setIcon(img, iconURL('bubble', i < full ? 'full' : 'empty'));
       }
     }
+
+    // Attack cooldown bar under the crosshair (Minecraft 1.9+).
+    const strength = this.game.attackStrength ? this.game.attackStrength() : 1;
+    const showAtk = strength < 1 && !this.game.mining;
+    this.attackIndicator.style.display = showAtk ? 'block' : 'none';
+    if (showAtk) this.attackFill.style.width = `calc(${Math.floor(strength * 16)} * var(--u))`;
 
     const level = p.xpLevel || 0;
     const prog = p.xpProgress || 0;

@@ -97,10 +97,10 @@ def(10, 'oak_leaves', '橡树树叶', {
   },
 });
 def(11, 'glass', '玻璃', { layer: LAYER.CUTOUT, opaque: false, hardness: 0.3, sound: 'glass', cullSelf: true, drops: () => [] });
-def(12, 'coal_ore', '煤矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 0, drops: () => [[257, 1]] });
+def(12, 'coal_ore', '煤矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 0, xp: [0, 2], drops: () => [[257, 1]] });
 def(13, 'iron_ore', '铁矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 1 });
 def(14, 'gold_ore', '金矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 2 });
-def(15, 'diamond_ore', '钻石矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 2, drops: () => [[261, 1]] });
+def(15, 'diamond_ore', '钻石矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 2, xp: [3, 7], drops: () => [[261, 1]] });
 def(16, 'water', '水', {
   render: RENDER.LIQUID, layer: LAYER.TRANSLUCENT, solid: false, opaque: false, lightAtten: 2,
   hardness: -1, replaceable: true, cullSelf: true, fluid: 'water', sound: null, tint: 'water',

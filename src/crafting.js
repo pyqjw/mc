@@ -1,5 +1,5 @@
 // Crafting recipes (shaped + shapeless) and furnace smelting.
-import { I, toolId, TOOL_MATERIALS } from './items.js';
+import { I, toolId, TOOL_MATERIALS, ARMOR_MATERIALS, armorId } from './items.js';
 
 const TAGS = {
   planks: [I.OAK_PLANKS, I.BIRCH_PLANKS, I.SPRUCE_PLANKS],
@@ -40,6 +40,10 @@ shaped(['WWW', 'PPP'], { W: I.WHITE_WOOL, P: 'planks' }, I.BED);
 shaped(['WWW'], { W: I.WHEAT }, I.BREAD);
 shaped(['GGG', 'GAG', 'GGG'], { G: I.GOLD_INGOT, A: I.APPLE }, I.GOLDEN_APPLE);
 shaped(['P', 'T'], { P: I.PUMPKIN, T: I.TORCH }, I.JACK_O_LANTERN);
+shaped([' SX', 'S X', ' SX'], { S: I.STICK, X: I.STRING }, I.BOW);
+shaped(['F', 'S', 'E'], { F: I.FLINT, S: I.STICK, E: I.FEATHER }, I.ARROW, 4);
+shapeless([I.BONE], I.BONE_MEAL, 3);
+shaped(['SS', 'SS'], { S: I.STRING }, I.WHITE_WOOL);
 
 for (const [block, material] of [[I.COAL_BLOCK, I.COAL], [I.IRON_BLOCK, I.IRON_INGOT], [I.GOLD_BLOCK, I.GOLD_INGOT], [I.DIAMOND_BLOCK, I.DIAMOND]]) {
   shaped(['XXX', 'XXX', 'XXX'], { X: material }, block);
@@ -55,6 +59,15 @@ for (const m of TOOL_MATERIALS) {
   shaped(['X', 'S', 'S'], key, toolId(m.key, 'shovel'));
   shaped(['X', 'X', 'S'], key, toolId(m.key, 'sword'));
   shaped(['XX', ' S', ' S'], key, toolId(m.key, 'hoe'));
+}
+
+const ARMOR_HEADS = { leather: I.LEATHER, iron: I.IRON_INGOT, golden: I.GOLD_INGOT, diamond: I.DIAMOND };
+for (const m of ARMOR_MATERIALS) {
+  const key = { X: ARMOR_HEADS[m.key] };
+  shaped(['XXX', 'X X'], key, armorId(m.key, 'helmet'));
+  shaped(['X X', 'XXX', 'XXX'], key, armorId(m.key, 'chestplate'));
+  shaped(['XXX', 'X X', 'X X'], key, armorId(m.key, 'leggings'));
+  shaped(['X X', 'X X'], key, armorId(m.key, 'boots'));
 }
 
 // grid: array of size*size stacks (or null). Returns {id, count} or null.
@@ -124,6 +137,24 @@ export const SMELTING = {
   [I.MUTTON]: I.COOKED_MUTTON,
   [I.CLAY_BALL]: I.BRICK,
   [I.CLAY]: I.BRICKS,
+  [I.CHICKEN]: I.COOKED_CHICKEN,
+};
+
+// Experience per smelted item (collected when the output is taken).
+export const SMELT_XP = {
+  [I.STONE]: 0.1,
+  [I.GLASS]: 0.1,
+  [I.IRON_INGOT]: 0.7,
+  [I.GOLD_INGOT]: 1,
+  [I.DIAMOND]: 1,
+  [I.COAL]: 0.1,
+  [I.CHARCOAL]: 0.15,
+  [I.COOKED_PORKCHOP]: 0.35,
+  [I.STEAK]: 0.35,
+  [I.COOKED_MUTTON]: 0.35,
+  [I.COOKED_CHICKEN]: 0.35,
+  [I.BRICK]: 0.3,
+  [I.BRICKS]: 0.3,
 };
 
 export const SMELT_TIME = 200; // ticks per item

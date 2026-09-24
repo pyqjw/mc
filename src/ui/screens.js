@@ -5,6 +5,7 @@ import { clickSlot, moveInto, sameItem, cloneStack } from '../inventory.js';
 import { findRecipe, RECIPES, SMELTING } from '../crafting.js';
 import { FUEL, getItem, itemName, maxStack } from '../items.js';
 import { bookIconURL } from './gui.js';
+import { armorSlotCanvas } from '../render/textures.js';
 import { drawSkinFront } from '../render/skin.js';
 
 function el(tag, cls, parent, text) {
@@ -96,6 +97,26 @@ export class Screens {
     return panel;
   }
 
+  // Armour slots accept only the matching piece; empty slots show a silhouette.
+  armorColumn(parent) {
+    const col = el('div', 'armor-col', parent);
+    const p = this.game.player;
+    for (let i = 0; i < 4; i++) {
+      const desc = {
+        get: () => p.armor[i],
+        set: (st) => { p.armor[i] = st; },
+        group: 'armor',
+        index: i,
+        accept: (st) => { const it = getItem(st.id); return !!(it && it.armor && it.armor.slot === i); },
+      };
+      const e = this.slot(col, desc);
+      const ghost = el('img', 'ghost', e);
+      ghost.src = armorSlotCanvas(i).toDataURL();
+      desc.ghost = ghost;
+    }
+    return col;
+  }
+
   bookButton(parent) {
     const b = el('button', 'book-btn', parent);
     const img = el('img', '', b);
@@ -141,6 +162,7 @@ export class Screens {
     if (kind === 'inventory') {
       const p = this.panel(null);
       const top = el('div', 'inv-top', p);
+      this.armorColumn(top);
       this.playerPreview(top);
       const craftBox = el('div', 'craft-box', top);
       el('div', 'label', craftBox, '合成');
@@ -255,6 +277,12 @@ export class Screens {
   takeOutput(desc, shift) {
     const s = desc.get();
     if (!s) return;
+    const tile = this.current && this.current.data && this.current.data.tile;
+    if (tile && tile.xp) {
+      const p = this.game.player.pos;
+      this.game.xpOrbs.spawnFloat(p.x, p.y + 0.5, p.z, tile.xp);
+      tile.xp = 0;
+    }
     if (shift) {
       const left = this.inv.add(s);
       desc.set(left > 0 ? { ...s, count: left } : null);
@@ -280,8 +308,12 @@ export class Screens {
       if (r) r = moveInto(inv, 0, 9, r);
       return r;
     };
-    if (desc.group === 'craft' || desc.group === 'container') {
+    const it = getItem(stack.id);
+    if (desc.group === 'craft' || desc.group === 'container' || desc.group === 'armor') {
       left = toPlayer(stack);
+    } else if (kind === 'inventory' && it && it.armor && !this.game.player.armor[it.armor.slot]) {
+      this.game.player.equip(stack);
+      left = null;
     } else if (kind === 'chest') {
       left = moveInto(this.current.data.tile.items, 0, 27, stack);
     } else if (kind === 'furnace') {
@@ -329,7 +361,10 @@ export class Screens {
 
   // ------------------------------------------------------------ rendering
   render() {
-    for (const [e, d] of this.slotEls) renderStack(e, d.get());
+    for (const [e, d] of this.slotEls) {
+      renderStack(e, d.get());
+      if (d.ghost) d.ghost.style.display = d.get() ? 'none' : '';
+    }
     if (this.cursor) {
       if (!this.cursorEl.firstChild) el('div', 'slot floating', this.cursorEl);
       renderStack(this.cursorEl.firstChild, this.cursor);

@@ -8,7 +8,7 @@ import {
 import { TerrainGenerator } from './generator.js';
 import { placeTree, treeHeight } from './trees.js';
 import { mulberry32 } from './noise.js';
-import { SMELTING, SMELT_TIME } from '../crafting.js';
+import { SMELTING, SMELT_TIME, SMELT_XP } from '../crafting.js';
 import { FUEL, maxStack, I } from '../items.js';
 
 const H = WORLD_HEIGHT;
@@ -577,6 +577,7 @@ export class World {
         t.cook++;
         if (t.cook >= SMELT_TIME) {
           t.cook = 0;
+          t.xp = (t.xp || 0) + (SMELT_XP[result] || 0);
           if (out) out.count++;
           else t.items[2] = { id: result, count: 1, damage: 0 };
           if (--input.count <= 0) t.items[0] = null;

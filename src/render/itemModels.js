@@ -1,7 +1,7 @@
 // 3D models for items: cubes for blocks, flat sprites for everything else. Used for the held item and drops.
 import * as THREE from 'three';
 import { BLOCKS, RENDER, TEX_TOP, TEX_BOTTOM, TEX_SIDE, TEX_FRONT, ATLAS_TILES_PER_ROW } from '../world/blocks.js';
-import { getItemAtlasCanvas, getItemCanvas, tileRect } from './textures.js';
+import { getItemAtlasCanvas, getItemCanvas, getBowCanvas, tileRect } from './textures.js';
 
 let atlasTexture = null;
 const geoCache = new Map();
@@ -87,8 +87,11 @@ export function spriteTexture(id) {
 // back quad plus a side quad for every pixel edge that borders transparency. Centred, 1 unit wide.
 const extrudedCache = new Map();
 export function extrudedGeometry(id) {
-  if (extrudedCache.has(id)) return extrudedCache.get(id);
-  const canvas = spriteTexture(id).image;
+  return extrudedFromCanvas(spriteTexture(id).image, id);
+}
+
+function extrudedFromCanvas(canvas, key) {
+  if (extrudedCache.has(key)) return extrudedCache.get(key);
   const data = canvas.getContext('2d').getImageData(0, 0, 16, 16).data;
   const solid = (x, y) => x >= 0 && y >= 0 && x < 16 && y < 16 && data[(y * 16 + x) * 4 + 3] > 127;
   const pos = [];
@@ -127,8 +130,22 @@ export function extrudedGeometry(id) {
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   g.setIndex(idx);
-  extrudedCache.set(id, g);
+  extrudedCache.set(key, g);
   return g;
+}
+
+// Bow being drawn (pull 1..3), for the first-person view.
+const bowTextures = [];
+export function bowMesh(pull) {
+  if (!bowTextures[pull]) {
+    const t = new THREE.CanvasTexture(getBowCanvas(pull));
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    bowTextures[pull] = t;
+  }
+  const mat = new THREE.MeshBasicMaterial({ map: bowTextures[pull], vertexColors: true, alphaTest: 0.5 });
+  return new THREE.Mesh(extrudedFromCanvas(getBowCanvas(pull), `bow:${pull}`), mat);
 }
 
 // Returns a fresh mesh (with its own material so brightness can be tinted per instance). Geometries

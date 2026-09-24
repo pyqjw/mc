@@ -359,6 +359,199 @@ function swim(sr, rand) {
   return finish(o, sr, 0.5);
 }
 
+// ------------------------------------------------------------------ more creatures
+function chickenCluck(sr, rand) {
+  const o = buf(sr, 0.5);
+  const n = 1 + Math.floor(rand() * 3);
+  let t = 0;
+  for (let k = 0; k < n; k++) {
+    const d = rr(rand, 0.06, 0.1);
+    const f = rr(rand, 520, 700) * (k === n - 1 ? 1.15 : 1);
+    const v = voice(sr, d, rand, {
+      f0: (tt) => f * (1 + 0.25 * Math.sin(Math.PI * tt / d)),
+      vowel: (tt) => lerpV(VOWELS.a, VOWELS.uh, tt / d),
+      amp: (tt) => Math.min(1, tt / 0.006) * Math.min(1, (d - tt) / 0.02),
+      breath: 0.2,
+      rough: 0.35,
+      nasal: 0.3,
+    });
+    const s0 = Math.floor(t * sr);
+    for (let i = 0; i < v.length && s0 + i < o.length; i++) o[s0 + i] += v[i];
+    t += d + rr(rand, 0.04, 0.09);
+  }
+  return finish(highpass(o, sr, 300), sr, 0.8);
+}
+
+function chickenHurt(sr, rand) {
+  const d = rr(rand, 0.16, 0.22);
+  const f = rr(rand, 900, 1100);
+  return finish(highpass(voice(sr, d, rand, {
+    f0: (t) => f * (1 + 0.3 * Math.sin(Math.PI * t / d)),
+    vowel: () => VOWELS.a,
+    amp: (t) => Math.min(1, t / 0.005) * Math.min(1, (d - t) / 0.04),
+    breath: 0.3,
+    rough: 0.5,
+  }), sr, 400), sr, 0.8);
+}
+
+// Rattling bones: dry, woody clicks.
+function boneRattle(sr, rand, dur, count) {
+  const o = buf(sr, dur + 0.1);
+  for (let i = 0; i < count; i++) {
+    const t = rand() * dur;
+    const f = rr(rand, 900, 2600);
+    ping(o, sr, t, f, rr(rand, 0.004, 0.012), rr(rand, 0.3, 0.9), f * 0.9, 0.0005);
+    grain(o, sr, t, 0.004, rr(rand, 2500, 5000), 3, rr(rand, 0.2, 0.5), rand);
+  }
+  return o;
+}
+
+function skeletonIdle(sr, rand) {
+  return finish(highpass(boneRattle(sr, rand, rr(rand, 0.3, 0.55), 26), sr, 400), sr, 0.7);
+}
+
+function skeletonHurt(sr, rand) {
+  const o = boneRattle(sr, rand, 0.18, 18);
+  noiseShape(o, sr, rand, { attack: 0.002, decay: 0.03, type: 'bandpass', freq: 1400, q: 1.5, amp: 0.8 });
+  return finish(highpass(o, sr, 300), sr, 0.8);
+}
+
+function skeletonDeath(sr, rand) {
+  const o = boneRattle(sr, rand, 0.7, 60);
+  for (let i = 0; i < 6; i++) ping(o, sr, 0.3 + rand() * 0.4, rr(rand, 250, 500), 0.03, 0.5, 200);
+  return finish(highpass(o, sr, 150), sr, 0.8);
+}
+
+// Spider hiss / chitter: bursts of noise chopped at a fast rate.
+function spiderSay(sr, rand, death = false) {
+  const d = death ? rr(rand, 0.8, 1.1) : rr(rand, 0.35, 0.6);
+  const o = buf(sr, d);
+  const bp = new Biquad('bandpass', 3000, 1.2, sr);
+  const rate = rr(rand, 28, 40);
+  for (let i = 0; i < o.length; i++) {
+    const t = i / sr;
+    if ((i & 63) === 0) bp.set((death ? 3200 - 2200 * (t / d) : 2600 + 800 * Math.sin(TAU * 3 * t)), 1.2);
+    const chop = 0.35 + 0.65 * Math.max(0, Math.sin(TAU * rate * t)) ** 2;
+    const env = Math.min(1, t / 0.03) * Math.min(1, (d - t) / 0.1);
+    o[i] = bp.tick(rand() * 2 - 1) * chop * env;
+  }
+  noiseShape(o, sr, rand, { attack: 0.01, decay: d * 0.25, type: 'highpass', freq: 5000, amp: 0.25 });
+  return finish(o, sr, 0.8);
+}
+
+// ------------------------------------------------------------------ combat & items
+function bowShoot(sr, rand) {
+  const o = buf(sr, 0.45);
+  const f = rr(rand, 140, 180);
+  ping(o, sr, 0, f, 0.05, 0.9, f * 0.94, 0.001);
+  ping(o, sr, 0, f * 3.1, 0.02, 0.4);
+  noiseShape(o, sr, rand, { from: 0.005, attack: 0.01, decay: 0.05, dur: 0.3, type: 'bandpass', freq: 2500, freqEnd: 900, q: 1.2, amp: 0.8 });
+  return finish(highpass(o, sr, 90), sr, 0.8);
+}
+
+function arrowHit(sr, rand) {
+  const o = buf(sr, 0.25);
+  ping(o, sr, 0, rr(rand, 300, 420), 0.03, 1, 250, 0.0005);
+  noiseShape(o, sr, rand, { attack: 0.0005, decay: 0.008, type: 'bandpass', freq: 2000, q: 1, amp: 0.8 });
+  for (let i = 0; i < 4; i++) ping(o, sr, 0.01 + i * 0.012, rr(rand, 180, 260), 0.012, 0.3 * (1 - i / 4));
+  return finish(o, sr, 0.75);
+}
+
+// Experience orb: a small bright bell.
+function orbDing(sr, rand) {
+  const o = buf(sr, 0.5);
+  const f = rr(rand, 1500, 1700);
+  [1, 2.01, 3.03, 4.6].forEach((m, i) => ping(o, sr, 0, f * m, 0.12 / (1 + i), 0.7 / (1 + i * 1.3)));
+  return finish(o, sr, 0.7);
+}
+
+// Level up: a rising sparkly arpeggio.
+function levelUp(sr, rand) {
+  const o = buf(sr, 1.4);
+  const base = 523.25;
+  [1, 1.26, 1.5, 2, 2.52].forEach((m, i) => {
+    const t = i * 0.07;
+    [1, 2.01, 3.02].forEach((h, j) => ping(o, sr, t, base * m * h, 0.35 / (1 + j), 0.5 / (1 + j * 1.5)));
+  });
+  for (let i = 0; i < 12; i++) ping(o, sr, 0.3 + rand() * 0.6, rr(rand, 3000, 6000), 0.05, 0.12);
+  return finish(o, sr, 0.8);
+}
+
+function equipLeather(sr, rand) {
+  const o = buf(sr, 0.35);
+  for (let i = 0; i < 3; i++) noiseShape(o, sr, rand, { from: i * 0.07, attack: 0.01, decay: 0.03, type: 'bandpass', freq: rr(rand, 700, 1300), q: 0.8, amp: 0.7, color: 'pink' });
+  return finish(highpass(o, sr, 120), sr, 0.6);
+}
+
+function equipIron(sr, rand) {
+  const o = buf(sr, 0.5);
+  for (let i = 0; i < 3; i++) {
+    const t = i * 0.06 + rand() * 0.02;
+    const f = rr(rand, 1600, 2600);
+    [1, 2.4, 4.1].forEach((m, j) => ping(o, sr, t, f * m, 0.05 / (1 + j), 0.5 / (1 + j)));
+    grain(o, sr, t, 0.006, 5000, 2, 0.3, rand);
+  }
+  noiseShape(o, sr, rand, { attack: 0.005, decay: 0.03, type: 'lowpass', freq: 600, amp: 0.5 });
+  return finish(o, sr, 0.65);
+}
+
+function boneMeal(sr, rand) {
+  const o = buf(sr, 0.3);
+  for (let i = 0; i < 45; i++) {
+    const t = (rand() ** 1.3) * 0.2;
+    grain(o, sr, t, rr(rand, 0.002, 0.006), rr(rand, 3000, 8000), rr(rand, 1, 3), rr(rand, 0.2, 0.7) * (1 - t * 4), rand);
+  }
+  return finish(highpass(o, sr, 800), sr, 0.6);
+}
+
+function whoosh(sr, rand, dur, f0, f1, amp = 1) {
+  const o = buf(sr, dur + 0.05);
+  noiseShape(o, sr, rand, { attack: dur * 0.3, decay: dur * 0.12, dur, type: 'bandpass', freq: f0, freqEnd: f1, q: 1.4, amp, color: 'pink' });
+  return o;
+}
+
+function attackStrong(sr, rand) {
+  const o = whoosh(sr, rand, 0.16, 1800, 700);
+  const s0 = Math.floor(0.05 * sr);
+  const thump = buf(sr, 0.2);
+  ping(thump, sr, 0, rr(rand, 90, 120), 0.04, 1, 60, 0.001);
+  noiseShape(thump, sr, rand, { attack: 0.001, decay: 0.012, type: 'lowpass', freq: 900, amp: 0.8 });
+  for (let i = 0; i < thump.length && s0 + i < o.length; i++) o[s0 + i] += thump[i];
+  return finish(o, sr, 0.85);
+}
+
+function attackWeak(sr, rand) {
+  const o = whoosh(sr, rand, 0.1, 1400, 900, 0.6);
+  ping(o, sr, 0.03, rr(rand, 130, 170), 0.02, 0.5, 100);
+  return finish(o, sr, 0.5);
+}
+
+function attackSweep(sr, rand) {
+  const o = whoosh(sr, rand, 0.32, 3200, 600);
+  noiseShape(o, sr, rand, { from: 0.02, attack: 0.05, decay: 0.05, dur: 0.28, type: 'highpass', freq: 4000, amp: 0.3 });
+  return finish(o, sr, 0.8);
+}
+
+function attackCrit(sr, rand) {
+  const o = attackStrong(sr, rand);
+  const c = buf(sr, 0.1);
+  noiseShape(c, sr, rand, { attack: 0.0005, decay: 0.006, type: 'highpass', freq: 3000, amp: 1 });
+  ping(c, sr, 0, 2400, 0.01, 0.5);
+  const s0 = Math.floor(0.05 * sr);
+  for (let i = 0; i < c.length && s0 + i < o.length; i++) o[s0 + i] += c[i];
+  return finish(o, sr, 0.9);
+}
+
+function throwSound(sr, rand) {
+  return finish(whoosh(sr, rand, 0.2, 1200, 2400, 0.8), sr, 0.6);
+}
+
+function eggPlop(sr, rand) {
+  const o = buf(sr, 0.15);
+  ping(o, sr, 0, rr(rand, 550, 650), 0.03, 1, 200, 0.001);
+  return finish(o, sr, 0.6);
+}
+
 // ------------------------------------------------------------------ ambience
 
 function windLoop(sr, rand) {
@@ -549,6 +742,30 @@ def('zombie_hurt', (sr, r) => zombie(sr, r, 'hurt'), { gain: 0.8, variants: 3 })
 def('zombie_death', (sr, r) => zombie(sr, r, 'death'), { gain: 0.85, variants: 2 });
 def('creeper_hurt', creeperHurt, { gain: 0.7, variants: 3 });
 def('creeper_death', creeperHurt, { gain: 0.8, variants: 2, pitch: [0.7, 0.8] });
+
+def('chicken', chickenCluck, { gain: 0.55, variants: 4, pitch: [0.9, 1.15] });
+def('chicken_hurt', chickenHurt, { gain: 0.6, variants: 3 });
+def('chicken_death', chickenHurt, { gain: 0.6, variants: 2, pitch: [0.8, 0.9] });
+def('skeleton', skeletonIdle, { gain: 0.6, variants: 4 });
+def('skeleton_hurt', skeletonHurt, { gain: 0.75, variants: 3 });
+def('skeleton_death', skeletonDeath, { gain: 0.8, variants: 2 });
+def('spider', (sr, r) => spiderSay(sr, r, false), { gain: 0.55, variants: 4 });
+def('spider_hurt', (sr, r) => spiderSay(sr, r, false), { gain: 0.65, variants: 2, pitch: [1.1, 1.3] });
+def('spider_death', (sr, r) => spiderSay(sr, r, true), { gain: 0.7, variants: 2 });
+def('bow', bowShoot, { gain: 0.7, variants: 3, pitch: [1, 1] });
+def('arrow.hit', arrowHit, { gain: 0.6, variants: 3, pitch: [0.9, 1.2] });
+def('orb', orbDing, { gain: 0.35, variants: 2, pitch: [1, 1] });
+def('levelup', levelUp, { gain: 0.6, variants: 1, pitch: [1, 1] });
+def('equip.leather', equipLeather, { gain: 0.7, variants: 2 });
+def('equip.iron', equipIron, { gain: 0.6, variants: 2 });
+def('bone_meal', boneMeal, { gain: 0.6, variants: 2 });
+def('attack.strong', attackStrong, { gain: 0.6, variants: 3 });
+def('attack.weak', attackWeak, { gain: 0.45, variants: 3 });
+def('attack.sweep', attackSweep, { gain: 0.6, variants: 2 });
+def('attack.crit', attackCrit, { gain: 0.65, variants: 2 });
+def('attack.knockback', attackStrong, { gain: 0.7, variants: 2, pitch: [0.75, 0.85] });
+def('throw', throwSound, { gain: 0.5, variants: 2, pitch: [1, 1] });
+def('egg', eggPlop, { gain: 0.6, variants: 2 });
 
 def('amb.wind', windLoop, { bus: 'ambient', variants: 1, loop: true, pitch: [1, 1] });
 def('amb.underwater', underwaterLoop, { bus: 'ambient', variants: 1, loop: true, pitch: [1, 1] });

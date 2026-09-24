@@ -2,7 +2,18 @@
 import * as THREE from 'three';
 import { moveEntity, hasGroundBelow, fluidSubmersion, pointInFluid, touchingBlocks } from './physics.js';
 import { B } from '../world/blocks.js';
-import { Inventory } from '../inventory.js';
+import { Inventory, cloneStack } from '../inventory.js';
+import { getItem } from '../items.js';
+
+// Damage causes that armour does not reduce.
+const BYPASS_ARMOR = new Set(['fall', 'drown', 'starve', 'void', 'poison']);
+
+// Experience needed to go from `level` to the next one (Minecraft's formula).
+export function xpToNextLevel(level) {
+  if (level >= 30) return 112 + (level - 30) * 9;
+  if (level >= 15) return 37 + (level - 15) * 5;
+  return 7 + level * 2;
+}
 
 const GRAVITY = 32;
 const JUMP_VELOCITY = 9.0;
@@ -35,13 +46,19 @@ export class Player {
     this.exhaustion = 0;
     this.air = 300;
     this.foodTimer = 0;
-    this.regenTicks = 0;
+    this.effects = {}; // name -> { ticks, level }: regeneration, poison, hunger
     this.invulnerable = 0; // seconds
     this.hurtTime = 0;
     this.dead = false;
     this.spawn = null;
 
     this.inventory = new Inventory(36);
+    this.armor = [null, null, null, null]; // helmet, chestplate, leggings, boots
+    this.xpLevel = 0;
+    this.xpProgress = 0;
+    this.xpTotal = 0;
+    this.xpCooldown = 0;
+    this.attackTimer = 10; // seconds since the last swing (attack cooldown)
     this.walkDist = 0;
     this.stepSoundDist = 0;
     this.bobPhase = 0;
@@ -234,10 +251,8 @@ export class Player {
     } else {
       this.foodTimer = 0;
     }
-    if (this.regenTicks > 0) {
-      this.regenTicks--;
-      if (this.regenTicks % 50 === 0) this.heal(1);
-    }
+    this.tickEffects();
+    if (this.xpCooldown > 0) this.xpCooldown--;
 
     if (this.eyeFluid === B.WATER) {
       this.air--;
@@ -254,9 +269,103 @@ export class Player {
     this.health = Math.min(20, this.health + n);
   }
 
+  // ------------------------------------------------------------ status effects
+  addEffect(name, seconds, level = 1) {
+    const cur = this.effects[name];
+    const ticks = Math.round(seconds * 20);
+    if (!cur || cur.level < level || cur.ticks < ticks) this.effects[name] = { ticks, level };
+  }
+
+  hasEffect(name) {
+    return !!this.effects[name];
+  }
+
+  tickEffects() {
+    for (const [name, e] of Object.entries(this.effects)) {
+      const t = e.ticks;
+      if (name === 'regeneration') {
+        const period = Math.max(1, 50 >> (e.level - 1));
+        if (t % period === 0) this.heal(1);
+      } else if (name === 'poison') {
+        const period = Math.max(1, 25 >> (e.level - 1));
+        if (t % period === 0 && this.health > 1) {
+          this.invulnerable = 0;
+          this.damage(1, 'poison');
+        }
+      } else if (name === 'hunger') {
+        this.exhaustion += 0.005 * e.level;
+      }
+      if (--e.ticks <= 0) delete this.effects[name];
+    }
+  }
+
+  // ------------------------------------------------------------ armour & experience
+  armorPoints() {
+    let n = 0;
+    for (const s of this.armor) if (s) n += getItem(s.id).armor.points;
+    return n;
+  }
+
+  armorToughness() {
+    let n = 0;
+    for (const s of this.armor) if (s) n += getItem(s.id).armor.toughness;
+    return n;
+  }
+
+  // Minecraft 1.9+ armour formula; also wears the armour down.
+  applyArmor(amount) {
+    const armor = this.armorPoints();
+    if (armor <= 0) return amount;
+    const tough = this.armorToughness();
+    const eff = Math.min(20, Math.max(armor / 5, armor - amount / (2 + tough / 4)));
+    const wear = Math.max(1, Math.floor(amount / 4));
+    for (let i = 0; i < 4; i++) {
+      const s = this.armor[i];
+      if (!s) continue;
+      s.damage = (s.damage || 0) + wear;
+      if (s.damage >= getItem(s.id).durability) {
+        this.armor[i] = null;
+        this.game.sound('break_tool');
+      }
+    }
+    return amount * (1 - eff / 25);
+  }
+
+  // Puts on an armour piece; returns the piece that was worn before (or null).
+  equip(stack) {
+    const it = getItem(stack.id);
+    const slot = it.armor.slot;
+    const old = this.armor[slot];
+    this.armor[slot] = cloneStack(stack);
+    this.game.sound(it.armor.material === 'leather' ? 'equip.leather' : 'equip.iron');
+    return old;
+  }
+
+  addXp(amount) {
+    if (amount <= 0) return;
+    this.xpTotal += amount;
+    this.xpProgress += amount / xpToNextLevel(this.xpLevel);
+    while (this.xpProgress >= 1) {
+      this.xpProgress = (this.xpProgress - 1) * xpToNextLevel(this.xpLevel);
+      this.xpLevel++;
+      this.xpProgress /= xpToNextLevel(this.xpLevel);
+      if (this.xpLevel % 5 === 0) this.game.sound('levelup', undefined, undefined, undefined, 0.75);
+    }
+  }
+
+  get score() {
+    return this.xpTotal;
+  }
+
+  // Experience dropped on death (Minecraft: 7 per level, at most 100).
+  deathXp() {
+    return Math.min(100, this.xpLevel * 7);
+  }
+
   damage(amount, cause, from = null) {
     if (this.dead || amount <= 0) return false;
     if (this.invulnerable > 0) return false;
+    if (!BYPASS_ARMOR.has(cause)) amount = this.applyArmor(amount);
     this.health -= amount;
     this.invulnerable = 0.5;
     this.hurtTime = 0.35;
@@ -283,7 +392,9 @@ export class Player {
   eat(food) {
     this.food = Math.min(20, this.food + food.hunger);
     this.saturation = Math.min(this.food, this.saturation + food.saturation);
-    if (food.regen) this.regenTicks = 20 * food.regen * 5;
+    for (const [name, seconds, chance, level = 1] of food.effects || []) {
+      if (Math.random() < chance) this.addEffect(name, seconds, level);
+    }
   }
 
   respawn(spawn) {
@@ -297,6 +408,10 @@ export class Player {
     this.fallDistance = 0;
     this.dead = false;
     this.invulnerable = 1;
+    this.effects = {};
+    this.xpLevel = 0;
+    this.xpProgress = 0;
+    this.xpTotal = 0;
   }
 
   toJSON() {
@@ -310,9 +425,12 @@ export class Player {
       exhaustion: this.exhaustion,
       air: this.air,
       inventory: this.inventory.toJSON(),
+      armor: this.armor.map(cloneStack),
       selected: this.inventory.selected,
       spawn: this.spawn,
       dead: this.dead,
+      xp: [this.xpLevel, this.xpProgress, this.xpTotal],
+      effects: this.effects,
     };
   }
 
@@ -326,8 +444,11 @@ export class Player {
     this.exhaustion = d.exhaustion ?? 0;
     this.air = d.air ?? 300;
     this.inventory.load(d.inventory);
+    this.armor = [0, 1, 2, 3].map((i) => cloneStack(d.armor && d.armor[i]));
     this.inventory.selected = d.selected || 0;
     this.spawn = d.spawn || null;
     this.dead = !!d.dead;
+    [this.xpLevel, this.xpProgress, this.xpTotal] = d.xp || [0, 0, 0];
+    this.effects = d.effects || {};
   }
 }

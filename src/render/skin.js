@@ -76,7 +76,7 @@ export function paintDefaultSkin() {
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) px(x0 + x, y0 + y, fn(x, y, w, h));
   };
 
-  const SKIN = [183, 132, 97];
+  const SKIN = [194, 142, 106];
   const SKIN_D = [160, 110, 78];
   const HAIR = [58, 38, 22];
   const HAIR_L = [78, 52, 30];
