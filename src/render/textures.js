@@ -1198,103 +1198,122 @@ function ingot(p, color) {
   outline(p);
 }
 
-// Meat sprites: each animal has its own silhouette, raw and cooked differ in colour.
-const MEAT_SHAPES = {
-  porkchop: [
-    '................',
-    '................',
-    '....FFFFF.......',
-    '...FFMMMMFF.....',
-    '..FMMMLLMMMF....',
-    '..FMMLMMMMMMF...',
-    '.FMMLMMMMLMMMF..',
-    '.FMMMMMMLMMMMMF.',
-    '.FMMMMMLMMMMMMF.',
-    '..FMMMMMMMMMMF..',
-    '...FMMMMMMMFF...',
-    '....FFMMMMF.....',
-    '......FMMMF.....',
-    '.......FMF......',
-    '........F.......',
-  ],
-  beef: [
-    '................',
-    '................',
-    '................',
-    '....MMMMMMMWW...',
-    '..MMMMMWMMMMWW..',
-    '.MMMWMMMMMWMMWW.',
-    '.MMMMWWMMMMMMWW.',
-    '.MMMMMMMMWMMMWW.',
-    '.MMWMMMMMMWWMWW.',
-    '.MMMWWMMMMMMMWW.',
-    '..MMMMMMWMMMWW..',
-    '...MMMMMMMMWW...',
-  ],
-  mutton: [
-    '................',
-    '................',
-    '...MMMMM........',
-    '..MMMWMMMM......',
-    '.MMMMMMMMMF.....',
-    '.MMWMMMMMMMF....',
-    '.MMMMMMWMMMF....',
-    '.MMMMMMMMMF.....',
-    '..MMMMMMMF......',
-    '...FMMMMF.......',
-    '....FFFBB.......',
-    '........BB......',
-    '.........BB.B...',
-    '..........BBBB..',
-    '...........BB...',
-  ],
-  chicken: [
-    '................',
-    '..BB.......BB...',
-    '..BB.......BB...',
-    '...SS.....SS....',
-    '....SS...SS.....',
-    '....SSSSSSS.....',
-    '...SSSSSSSSS....',
-    '..SSSSSSSSSSS...',
-    '.SSSSSSSSSSSSS..',
-    '.SSSSSSSSSSSSS..',
-    '.SSSSSSSSSSSSS..',
-    '..SSSSSSSSSSS...',
-    '...SSSSSSSSS....',
-    '.....SSSSS......',
-  ],
-  rotten_flesh: [
-    '................',
-    '................',
-    '...........RR...',
-    '.........RRRR...',
-    '...RR..RRRDRR...',
-    '..RRRRRRRRRR....',
-    '.RRDRRR.RRRR....',
-    '.RRRRRRRRDR.....',
-    '..RRRGRRRRRR....',
-    '...RRRRRRDRRR...',
-    '....RR.RRRRRR...',
-    '.....RRRRGRR....',
-    '......RRRRR.....',
-    '.......RR.......',
-  ],
-};
+// Meat sprites in Minecraft's layout: food lies diagonally from bottom-left to top-right, lit from
+// the top left, with an outline in a darker shade of its own colour.
+// Ellipse test with its long axis turned by `angle` (0 = along the bottom-left/top-right diagonal).
+function ellipse(cx, cy, ra, rb, angle = 0) {
+  const ca = Math.cos(angle - Math.PI / 4);
+  const sa = Math.sin(angle - Math.PI / 4);
+  return (x, y) => {
+    const dx = x + 0.5 - cx;
+    const dy = y + 0.5 - cy;
+    const a = (dx * ca + dy * sa) / ra;
+    const b = (-dx * sa + dy * ca) / rb;
+    return a * a + b * b <= 1;
+  };
+}
 
-// Paints a meat shape, shades its edges (light top-left, dark bottom-right) and outlines it.
-function meat(p, shape, pal) {
-  const rows = MEAT_SHAPES[shape];
-  const inside = (x, y) => y >= 0 && y < rows.length && x >= 0 && x < 16 && rows[y][x] !== '.';
-  for (let y = 0; y < rows.length; y++) {
-    for (let x = 0; x < 16; x++) {
-      const c = pal[rows[y][x]];
-      if (!c) continue;
+// Paints the texels of `inside` with colour(x, y) (a palette entry), shaded at the edges.
+function food(p, inside, colour) {
+  for (let y = 0; y < T; y++) {
+    for (let x = 0; x < T; x++) {
+      if (!inside(x, y)) continue;
       const s = (inside(x, y - 1) ? 0 : 1) + (inside(x - 1, y) ? 0 : 1) - (inside(x, y + 1) ? 0 : 1) - (inside(x + 1, y) ? 0 : 1);
-      p.px(x, y, mul(c, (s > 0 ? 1.12 : s < 0 ? 0.8 : 1) * (0.95 + p.rand() * 0.1)));
+      const c = colour(x, y);
+      p.px(x, y, mul(c, (s > 0 ? 1.1 : s < 0 ? 0.82 : 1) * (0.96 + p.rand() * 0.08)));
     }
   }
-  outline(p, 0.4);
+}
+
+// Across-axis coordinate for the diagonal food shapes: negative towards the top left.
+const across = (x, y, cx, cy) => (x + 0.5 - cx + y + 0.5 - cy) / Math.SQRT2;
+const along = (x, y, cx, cy) => (x + 0.5 - cx - (y + 0.5 - cy)) / Math.SQRT2;
+
+// Porkchop: a rounded chop narrowing into a curled tail at the bottom left, with a pale fat rim
+// along its upper edge and a lighter streak.
+function porkchop(p, pal) {
+  const head = ellipse(9.4, 6.6, 5.6, 4.4);
+  const tail = ellipse(5, 10.6, 3, 2);
+  const tip = (x, y) => (x === 2 && (y === 12 || y === 13)) || (x === 3 && y === 13);
+  const inside = (x, y) => head(x, y) || tail(x, y) || tip(x, y);
+  food(p, inside, (x, y) => {
+    const b = across(x, y, 9.4, 6.6);
+    if (!inside(x, y - 1) || (!inside(x - 1, y) && b < 0)) return pal.fat;
+    if (b < -2.4) return pal.light;
+    if (Math.abs(b - 0.8) < 0.45 && head(x, y)) return pal.light;
+    if (b > 2.8) return pal.dark;
+    return pal.meat;
+  });
+  outline(p, 0.42);
+}
+
+// Beef: a thick red steak marbled with white fat running along it.
+function beef(p, pal) {
+  const inside = ellipse(8, 8, 7.4, 5);
+  food(p, inside, (x, y) => {
+    const b = across(x, y, 8, 8);
+    const a = Math.floor(along(x, y, 8, 8) + 10);
+    if (b < -3.6) return pal.fat;
+    if (Math.abs(b + 1.5) < 0.42 && a % 4 !== 0) return pal.fat;
+    if (Math.abs(b - 1.3) < 0.42 && a % 5 > 1) return pal.fat;
+    if (b > 3.4) return pal.dark;
+    return pal.meat;
+  });
+  outline(p, 0.42);
+}
+
+// Mutton: a chop in the upper right with its bone sticking out to the bottom left.
+function mutton(p, pal) {
+  const meat = ellipse(9.8, 6.2, 5.6, 4.4);
+  const bone = (x, y) => (x + y === 15 || x + y === 16) && x >= 2 && x <= 6;
+  const knob = (x, y) => (x === 1 && (y === 12 || y === 13)) || (x === 2 && y === 14) || (x === 3 && y === 14);
+  food(p, (x, y) => bone(x, y) || knob(x, y), () => pal.bone);
+  food(p, meat, (x, y) => {
+    const b = across(x, y, 9.8, 6.2);
+    if (b < -2.9 || !meat(x, y - 1) || !meat(x + 1, y)) return pal.fat;
+    if (Math.abs(b - 0.4) < 0.45) return pal.light;
+    return pal.meat;
+  });
+  outline(p, 0.42);
+}
+
+// Chicken: a plucked bird with its two drumsticks pointing to the upper left.
+const CHICKEN = [
+  '................',
+  '.....bb.........',
+  '....bbb.........',
+  '.....bLL........',
+  '.bb...LLL.......',
+  '.bbb...LLSSS....',
+  '..bLL..LSSSSSS..',
+  '...LLL.SSSSSSSS.',
+  '....LLSSSSSSSSS.',
+  '.....LSSSSSSSSD.',
+  '.....SSSSSSSSSD.',
+  '......SSSSSSSDD.',
+  '......SSSSSSSD..',
+  '.......SSSSDD...',
+  '.........DDD....',
+];
+function chicken(p, pal) {
+  const at = (x, y) => (y >= 0 && y < CHICKEN.length && x >= 0 && x < 16 ? CHICKEN[y][x] : '.');
+  const colours = { b: pal.bone, L: pal.leg, S: pal.skin, D: pal.dark };
+  food(p, (x, y) => at(x, y) !== '.', (x, y) => colours[at(x, y)]);
+  outline(p, 0.42);
+}
+
+// Rotten flesh: a ragged, greenish strip with dark rot and holes.
+function rottenFlesh(p, pal) {
+  const inside = (x, y) => ellipse(8, 8, 7.4, 3.6)(x, y) && !((x * 7 + y * 13) % 17 === 0) && !(x === 6 && y === 9) && !(x === 11 && y === 3);
+  food(p, inside, (x, y) => {
+    const h = (x * 31 + y * 17) % 11;
+    if (h === 0 || h === 5) return pal.dark;
+    if (h === 3 || h === 8) return pal.green;
+    return pal.flesh;
+  });
+  // Torn edges.
+  for (const [x, y] of [[3, 10], [13, 4], [10, 9], [5, 5]]) p.px(x, y, pal.flesh);
+  outline(p, 0.42);
 }
 
 const BONE = [242, 238, 224];
@@ -1540,13 +1559,13 @@ const ITEM_PAINTERS = {
   lava_bucket: (p) => bucket(p, [[232, 110, 20], [252, 176, 40]]),
   apple: (p, r) => fruit(p, [206, 28, 30], r),
   golden_apple: (p, r) => fruit(p, [248, 206, 48], r),
-  porkchop: (p) => meat(p, 'porkchop', { M: [240, 148, 150], L: [252, 192, 192], F: [252, 230, 222] }),
-  cooked_porkchop: (p) => meat(p, 'porkchop', { M: [186, 118, 66], L: [218, 164, 100], F: [232, 200, 142] }),
-  beef: (p) => meat(p, 'beef', { M: [192, 38, 36], W: [246, 212, 210] }),
-  steak: (p) => meat(p, 'beef', { M: [104, 58, 30], W: [168, 116, 64] }),
-  mutton: (p) => meat(p, 'mutton', { M: [212, 60, 56], W: [240, 144, 134], F: [246, 222, 212], B: BONE }),
-  cooked_mutton: (p) => meat(p, 'mutton', { M: [138, 80, 42], W: [178, 118, 66], F: [204, 162, 110], B: BONE }),
-  rotten_flesh: (p) => meat(p, 'rotten_flesh', { R: [146, 112, 68], D: [84, 62, 40], G: [104, 146, 62] }),
+  porkchop: (p) => porkchop(p, { meat: [232, 138, 140], light: [246, 180, 176], dark: [196, 104, 110], fat: [252, 226, 216] }),
+  cooked_porkchop: (p) => porkchop(p, { meat: [192, 128, 72], light: [224, 176, 112], dark: [146, 92, 50], fat: [238, 208, 150] }),
+  beef: (p) => beef(p, { meat: [196, 40, 40], dark: [146, 24, 28], fat: [244, 204, 200] }),
+  steak: (p) => beef(p, { meat: [116, 66, 34], dark: [82, 44, 22], fat: [176, 122, 70] }),
+  mutton: (p) => mutton(p, { meat: [206, 56, 52], light: [232, 110, 100], fat: [246, 222, 212], bone: BONE }),
+  cooked_mutton: (p) => mutton(p, { meat: [140, 82, 44], light: [170, 112, 64], fat: [206, 164, 112], bone: BONE }),
+  rotten_flesh: (p) => rottenFlesh(p, { flesh: [150, 116, 70], dark: [88, 64, 40], green: [108, 150, 64] }),
   gunpowder: (p, r) => { for (let i = 0; i < 45; i++) { const a = r() * Math.PI * 2; const d = Math.sqrt(r()) * 5; p.px(Math.round(7.5 + Math.cos(a) * d), Math.round(9 + Math.sin(a) * d * 0.7), mul([90, 90, 90], 0.6 + r() * 0.8)); } },
   leather: (p, r) => { for (let y = 3; y < 14; y++) for (let x = 3; x < 13; x++) if (!((x === 3 || x === 12) && (y === 3 || y === 13))) p.px(x, y, mul([150, 85, 45], 0.85 + r() * 0.3)); },
   clay_ball: (p, r) => { ball(p, 8, 8.5, 5, 4.5, [160, 166, 182], r); outline(p); },
@@ -1627,8 +1646,8 @@ const ITEM_PAINTERS = {
     }
     p.px(6, 5, [255, 250, 235]);
   },
-  chicken: (p) => meat(p, 'chicken', { S: [248, 204, 190], B: BONE }),
-  cooked_chicken: (p) => meat(p, 'chicken', { S: [204, 136, 64], B: [236, 222, 190] }),
+  chicken: (p) => chicken(p, { skin: [246, 206, 192], leg: [236, 188, 174], dark: [212, 160, 148], bone: BONE }),
+  cooked_chicken: (p) => chicken(p, { skin: [214, 146, 72], leg: [196, 126, 58], dark: [164, 100, 42], bone: [238, 224, 192] }),
   spider_eye: (p, r) => {
     blob(p, 7.5, 8, 5.5, [150, 26, 30], r);
     blob(p, 7.5, 8.5, 2.2, [60, 8, 12], r);
