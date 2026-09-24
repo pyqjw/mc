@@ -15,6 +15,12 @@ export const TILES = [
   'oak_door_top', 'oak_door_bottom', 'ladder', 'bookshelf', 'sugar_cane', 'fern', 'brown_mushroom', 'red_mushroom',
   'azure_bluet', 'oxeye_daisy', 'cornflower', 'allium', 'blue_orchid', 'red_tulip', 'orange_tulip', 'white_tulip',
   'pink_tulip', 'lily_of_the_valley', 'smooth_stone', 'smooth_stone_slab_side', 'mossy_cobblestone', 'glass_pane_top',
+  'acacia_log', 'acacia_log_top', 'acacia_leaves', 'acacia_planks', 'acacia_sapling',
+  'jungle_log', 'jungle_log_top', 'jungle_leaves', 'jungle_planks', 'jungle_sapling',
+  'dark_oak_log', 'dark_oak_log_top', 'dark_oak_leaves', 'dark_oak_planks', 'dark_oak_sapling',
+  'vine', 'lily_pad', 'red_sand', 'terracotta', 'orange_terracotta', 'yellow_terracotta', 'brown_terracotta',
+  'red_terracotta', 'white_terracotta', 'light_gray_terracotta', 'granite', 'diorite', 'andesite',
+  'lapis_ore', 'redstone_ore', 'emerald_ore', 'spawner', 'coarse_dirt', 'podzol_top', 'podzol_side',
 ];
 export const TILE_INDEX = Object.fromEntries(TILES.map((n, i) => [n, i]));
 export const ATLAS_TILES_PER_ROW = 16;
@@ -90,7 +96,7 @@ def(8, 'gravel', '沙砾', {
   hardness: 0.6, tool: 'shovel', gravity: true, sound: 'gravel',
   drops: (r) => (r() < 0.1 ? [[279, 1]] : [[8, 1]]),
 });
-def(9, 'oak_log', '橡木原木', { tex: { top: 'oak_log_top', side: 'oak_log' }, hardness: 2, tool: 'axe', sound: 'wood' });
+def(9, 'oak_log', '橡木原木', { tex: { top: 'oak_log_top', side: 'oak_log' }, hardness: 2, tool: 'axe', sound: 'wood', log: true });
 def(10, 'oak_leaves', '橡树树叶', {
   ...leaves,
   tint: 'foliage',
@@ -145,9 +151,9 @@ def(25, 'cactus', '仙人掌', {
   tex: { top: 'cactus_top', bottom: 'cactus_bottom', side: 'cactus_side' }, layer: LAYER.CUTOUT, opaque: false,
   hardness: 0.4, support: 'cactus', sound: 'wool', damage: 1,
 });
-def(26, 'birch_log', '白桦原木', { tex: { top: 'birch_log_top', side: 'birch_log' }, hardness: 2, tool: 'axe', sound: 'wood' });
+def(26, 'birch_log', '白桦原木', { tex: { top: 'birch_log_top', side: 'birch_log' }, hardness: 2, tool: 'axe', sound: 'wood', log: true });
 def(27, 'birch_leaves', '白桦树叶', { ...leaves, drops: (r) => (r() < 0.05 ? [[49, 1]] : []) });
-def(28, 'spruce_log', '云杉原木', { tex: { top: 'spruce_log_top', side: 'spruce_log' }, hardness: 2, tool: 'axe', sound: 'wood' });
+def(28, 'spruce_log', '云杉原木', { tex: { top: 'spruce_log_top', side: 'spruce_log' }, hardness: 2, tool: 'axe', sound: 'wood', log: true });
 def(29, 'spruce_leaves', '云杉树叶', { ...leaves, drops: (r) => (r() < 0.05 ? [[50, 1]] : []) });
 def(30, 'birch_planks', '白桦木板', { hardness: 2, tool: 'axe', sound: 'wood' });
 def(31, 'spruce_planks', '云杉木板', { hardness: 2, tool: 'axe', sound: 'wood' });
@@ -254,6 +260,38 @@ const FLOWERS = [
 ];
 for (const [id, key, name] of FLOWERS) def(id, key, name, { ...cross, support: 'soil' });
 
+// ------------------------------------------------------------ more woods, badlands, stone and ores
+const WOODS = [
+  [106, 'acacia', '金合欢'], [110, 'jungle', '丛林'], [114, 'dark_oak', '深色橡木'],
+];
+for (const [id, key, name] of WOODS) {
+  def(id, `${key}_log`, `${name}原木`, { tex: { top: `${key}_log_top`, side: `${key}_log` }, hardness: 2, tool: 'axe', sound: 'wood', log: true });
+  def(id + 1, `${key}_leaves`, `${name}树叶`, { ...leaves, tint: 'foliage', drops: (r) => (r() < 0.05 ? [[id + 3, 1]] : []) });
+  def(id + 2, `${key}_planks`, `${name}木板`, { hardness: 2, tool: 'axe', sound: 'wood' });
+  def(id + 3, `${key}_sapling`, `${name}树苗`, { ...cross, support: 'soil', sapling: key });
+}
+// meta: facing (away from the block it hangs on), like ladders.
+def(118, 'vine', '藤蔓', {
+  tex: 'vine', render: RENDER.SHAPE, shape: 'vine', layer: LAYER.CUTOUT, solid: false, opaque: false, hardness: 0.2,
+  sound: 'grass', tint: 'foliage', replaceable: true, climbable: true, drops: () => [], support: 'vine',
+});
+def(119, 'lily_pad', '睡莲', {
+  tex: 'lily_pad', render: RENDER.SHAPE, shape: 'lilypad', layer: LAYER.CUTOUT, opaque: false, hardness: 0, sound: 'grass', support: 'water',
+});
+def(120, 'red_sand', '红沙', { hardness: 0.5, tool: 'shovel', gravity: true, sound: 'sand' });
+const TERRACOTTA = [[121, 'terracotta', '陶瓦'], [122, 'orange_terracotta', '橙色陶瓦'], [123, 'yellow_terracotta', '黄色陶瓦'],
+  [124, 'brown_terracotta', '棕色陶瓦'], [125, 'red_terracotta', '红色陶瓦'], [126, 'white_terracotta', '白色陶瓦'], [127, 'light_gray_terracotta', '淡灰色陶瓦']];
+for (const [id, key, name] of TERRACOTTA) def(id, key, name, { hardness: 1.25, tool: 'pickaxe', harvestLevel: 0 });
+def(128, 'granite', '花岗岩', { hardness: 1.5, tool: 'pickaxe', harvestLevel: 0 });
+def(129, 'diorite', '闪长岩', { hardness: 1.5, tool: 'pickaxe', harvestLevel: 0 });
+def(130, 'andesite', '安山岩', { hardness: 1.5, tool: 'pickaxe', harvestLevel: 0 });
+def(131, 'lapis_ore', '青金石矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 1, xp: [2, 5], drops: (r) => [[330, 4 + Math.floor(r() * 5)]] });
+def(132, 'redstone_ore', '红石矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 2, xp: [1, 5], drops: (r) => [[331, 4 + Math.floor(r() * 2)]] });
+def(133, 'emerald_ore', '绿宝石矿石', { hardness: 3, tool: 'pickaxe', harvestLevel: 2, xp: [3, 7], drops: () => [[332, 1]] });
+def(134, 'spawner', '刷怪笼', { layer: LAYER.CUTOUT, opaque: false, hardness: 5, tool: 'pickaxe', harvestLevel: 0, sound: 'metal', xp: [15, 43], drops: () => [] });
+def(135, 'coarse_dirt', '砂土', { hardness: 0.5, tool: 'shovel', sound: 'gravel' });
+def(136, 'podzol', '灰化土', { tex: { top: 'podzol_top', bottom: 'dirt', side: 'podzol_side' }, hardness: 0.5, tool: 'shovel', sound: 'gravel', drops: () => [[3, 1]] });
+
 export const B = Object.fromEntries(BLOCKS.filter(Boolean).map((b) => [b.key.toUpperCase(), b.id]));
 
 // Flat typed lookup tables for hot loops (mesher, lighting, physics).
@@ -274,6 +312,7 @@ export const IS_ORIENTABLE = new Uint8Array(MAX_BLOCK_ID);
 export const TINT = { NONE: 0, GRASS: 1, FOLIAGE: 2, WATER: 3 };
 // Light-blocking but not full blocks (slabs, stairs) show the brightest neighbouring light.
 export const NEIGHBOR_LIGHT = new Uint8Array(MAX_BLOCK_ID);
+export const IS_LOG = new Uint8Array(MAX_BLOCK_ID);
 export const TINT_TYPE = new Uint8Array(MAX_BLOCK_ID);
 
 for (const b of BLOCKS) {
@@ -289,6 +328,7 @@ for (const b of BLOCKS) {
   IS_ORIENTABLE[b.id] = b.orientable ? 1 : 0;
   TINT_TYPE[b.id] = b.tint ? TINT[b.tint.toUpperCase()] : 0;
   NEIGHBOR_LIGHT[b.id] = b.neighborLight ? 1 : 0;
+  IS_LOG[b.id] = b.log ? 1 : 0;
   for (const [slot, arr] of [['top', TEX_TOP], ['bottom', TEX_BOTTOM], ['side', TEX_SIDE], ['front', TEX_FRONT]]) {
     const t = b.textures[slot];
     if (b.render !== RENDER.NONE && TILE_INDEX[t] === undefined) {

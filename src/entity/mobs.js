@@ -945,6 +945,40 @@ export class MobManager {
       this.spawnTimer = 0;
       this.trySpawnHostiles();
     }
+    this.tickSpawners();
+  }
+
+  // Monster spawners (dungeons) work while the player is within 16 blocks, like Minecraft's.
+  tickSpawners() {
+    const game = this.game;
+    const world = game.world;
+    if (game.player.dead) return;
+    const p = game.player.pos;
+    for (const [key, t] of world.tiles) {
+      if (t.type !== 'spawner') continue;
+      const [sx, sy, sz] = key.split(',').map(Number);
+      const dx = sx + 0.5 - p.x;
+      const dy = sy + 0.5 - p.y;
+      const dz = sz + 0.5 - p.z;
+      if (dx * dx + dy * dy + dz * dz > 256) continue;
+      if (world.getBlock(sx, sy, sz) !== B.SPAWNER) continue;
+      if (Math.random() < 0.3) game.particles.smoke(sx + 0.2 + Math.random() * 0.6, sy + 0.5 + Math.random() * 0.5, sz + 0.2 + Math.random() * 0.6, 1, 0x333333, 0.15, 0.4, 0.6);
+      if (--t.delay > 0) continue;
+      t.delay = 200 + Math.floor(Math.random() * 600);
+      const near = this.mobs.filter((m) => m.type === t.mob && Math.abs(m.pos.x - sx) < 9 && Math.abs(m.pos.y - sy) < 5 && Math.abs(m.pos.z - sz) < 9).length;
+      if (near >= 6) continue;
+      for (let i = 0; i < 4; i++) {
+        const x = Math.floor(sx + (Math.random() - Math.random()) * 4);
+        const y = sy + Math.floor(Math.random() * 3) - 1;
+        const z = Math.floor(sz + (Math.random() - Math.random()) * 4);
+        if (world.getBlock(x, y, z) !== 0 || world.getBlock(x, y + 1, z) !== 0) continue;
+        const below = world.getBlock(x, y - 1, z);
+        if (below <= 0 || !IS_SOLID[below]) continue;
+        if (world.getBlockLight(x, y, z) > 11) continue;
+        this.spawn(t.mob, x + 0.5, y, z + 0.5);
+        game.particles.poof(x + 0.5, y + 0.5, z + 0.5);
+      }
+    }
   }
 
   trySpawnHostiles() {

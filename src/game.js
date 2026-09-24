@@ -4,7 +4,7 @@ import { World } from './world/world.js';
 import { raycast } from './world/raycast.js';
 import { B, BLOCKS, IS_SOLID, IS_FLUID, RENDER } from './world/blocks.js';
 import { DIRS, shapeBoxes } from './world/shapes.js';
-import { BIOME_NAMES } from './world/generator.js';
+import { BIOME_NAMES, BIOMES } from './world/generator.js';
 import { WORLD_HEIGHT } from './constants.js';
 import { Player } from './entity/player.js';
 import { MobManager } from './entity/mobs.js';
@@ -19,10 +19,12 @@ import { HUD } from './ui/hud.js';
 import { Screens } from './ui/screens.js';
 import { getItem, I, ITEMS, HAND_ATTACK_SPEED } from './items.js';
 import { blockSound } from './audio/sounds.js';
-import { BIOMES } from './world/generator.js';
 
 const REACH = 4.5;
 const ENTITY_REACH = 3;
+
+// Biomes without birdsong.
+const NO_BIRDS = new Set([BIOMES.DESERT, BIOMES.OCEAN, BIOMES.DEEP_OCEAN, BIOMES.FROZEN_OCEAN, BIOMES.SNOWY, BIOMES.BEACH, BIOMES.SNOWY_BEACH, BIOMES.BADLANDS, BIOMES.STONY_PEAKS, BIOMES.SNOWY_PEAKS, BIOMES.STONY_SHORE]);
 
 const DEATH_MESSAGES = {
   arrow: '被骷髅射杀了',
@@ -572,7 +574,7 @@ export class Game {
     if (b.shape === 'slab') meta = ny === -1 || (side && fy > 0.5) ? 1 : 0;
     if (b.shape === 'stairs') meta = facing | (ny === -1 || (side && fy > 0.5) ? 4 : 0);
     if (b.shape === 'gate') meta = facing;
-    if (b.shape === 'ladder') {
+    if (b.shape === 'ladder' || b.shape === 'vine') {
       if (!side || !world.getBlock(hit.x, hit.y, hit.z) || !BLOCKS[hit.id].opaque) return;
       meta = normalDir;
     }
@@ -943,7 +945,7 @@ export class Game {
         altitude: p.y,
         nearWater: prev.nearWater * 0.5 + Math.min(1, water / 12) * 0.5,
         nearLava: prev.nearLava * 0.5 + Math.min(1, lava / 8) * 0.5,
-        birds: biome !== BIOMES.DESERT && biome !== BIOMES.OCEAN && biome !== BIOMES.SNOWY && biome !== BIOMES.BEACH,
+        birds: !NO_BIRDS.has(biome),
         snowy: this.weatherFx.snowy(w, hx, hz, hy),
       };
     }

@@ -12,8 +12,8 @@ self.onmessage = (e) => {
     return;
   }
   if (msg.type === 'generate') {
-    const { blocks, meta } = generator.generateChunk(msg.cx, msg.cz);
-    self.postMessage({ type: 'generated', id: msg.id, cx: msg.cx, cz: msg.cz, blocks, meta }, [blocks.buffer, meta.buffer]);
+    const { blocks, meta, tiles } = generator.generateChunk(msg.cx, msg.cz);
+    self.postMessage({ type: 'generated', id: msg.id, cx: msg.cx, cz: msg.cz, blocks, meta, tiles }, [blocks.buffer, meta.buffer]);
     return;
   }
   if (msg.type === 'mesh') {

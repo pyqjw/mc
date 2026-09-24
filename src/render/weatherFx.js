@@ -2,6 +2,7 @@
 // that precipitation reaches, scrolling down; plus lightning bolts.
 import * as THREE from 'three';
 import { mulberry32 } from '../world/noise.js';
+import { SNOW_TEMP } from '../world/generator.js';
 
 const RADIUS = 10;
 const MAX_COLUMNS = (RADIUS * 2 + 1) ** 2;
@@ -129,7 +130,7 @@ export class WeatherFx {
       if (this.climate.size > 20000) this.climate.clear();
       this.climate.set(key, temp);
     }
-    return temp < -0.35 || y > 100;
+    return temp < SNOW_TEMP || y > 100;
   }
 
   update(dt, cam, world, weather, daylight, now) {

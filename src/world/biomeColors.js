@@ -1,6 +1,6 @@
 // Biome tint colours for grass, foliage and water (like Minecraft's colour maps), blended across
 // biome borders the way Minecraft's "biome blend" option does. Runs in the mesh workers.
-import { BIOMES } from './generator.js';
+import { BIOMES, SNOW_TEMP } from './generator.js';
 
 const hex = (h) => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
 
@@ -17,12 +17,28 @@ GRASS[BIOMES.SNOWY] = hex(0x80b497); FOLIAGE[BIOMES.SNOWY] = hex(0x60a17b);
 GRASS[BIOMES.MOUNTAINS] = hex(0x8ab689); FOLIAGE[BIOMES.MOUNTAINS] = hex(0x6da36b);
 GRASS[BIOMES.RIVER] = hex(0x8eb971); FOLIAGE[BIOMES.RIVER] = hex(0x71a74d);
 GRASS[BIOMES.BIRCH_FOREST] = hex(0x88bb67); FOLIAGE[BIOMES.BIRCH_FOREST] = hex(0x6ba941);
+GRASS[BIOMES.SAVANNA] = hex(0xbfb755); FOLIAGE[BIOMES.SAVANNA] = hex(0xaea42a);
+GRASS[BIOMES.JUNGLE] = hex(0x59c93c); FOLIAGE[BIOMES.JUNGLE] = hex(0x30bb0b);
+GRASS[BIOMES.SWAMP] = hex(0x6a7039); FOLIAGE[BIOMES.SWAMP] = hex(0x6a7039);
+GRASS[BIOMES.DARK_FOREST] = hex(0x507a32); FOLIAGE[BIOMES.DARK_FOREST] = hex(0x59ae30);
+GRASS[BIOMES.BADLANDS] = hex(0x90814d); FOLIAGE[BIOMES.BADLANDS] = hex(0x9e814d);
+GRASS[BIOMES.DEEP_OCEAN] = hex(0x8eb971); FOLIAGE[BIOMES.DEEP_OCEAN] = hex(0x71a74d);
+GRASS[BIOMES.STONY_PEAKS] = hex(0x9abe4b); FOLIAGE[BIOMES.STONY_PEAKS] = hex(0x82ac1e);
+GRASS[BIOMES.SNOWY_PEAKS] = hex(0x80b497); FOLIAGE[BIOMES.SNOWY_PEAKS] = hex(0x60a17b);
+GRASS[BIOMES.SNOWY_TAIGA] = hex(0x80b497); FOLIAGE[BIOMES.SNOWY_TAIGA] = hex(0x60a17b);
+GRASS[BIOMES.STONY_SHORE] = hex(0x8ab689); FOLIAGE[BIOMES.STONY_SHORE] = hex(0x6da36b);
+GRASS[BIOMES.FROZEN_RIVER] = hex(0x80b497); FOLIAGE[BIOMES.FROZEN_RIVER] = hex(0x60a17b);
+GRASS[BIOMES.MEADOW] = hex(0x83bb6d); FOLIAGE[BIOMES.MEADOW] = hex(0x63a948);
+GRASS[BIOMES.FROZEN_OCEAN] = hex(0x80b497); FOLIAGE[BIOMES.FROZEN_OCEAN] = hex(0x60a17b);
+GRASS[BIOMES.SNOWY_BEACH] = hex(0x83b593); FOLIAGE[BIOMES.SNOWY_BEACH] = hex(0x64a278);
 
 const WATER_DEFAULT = hex(0x3f76e4);
 const WATER_WARM = hex(0x43d5ee);
 const WATER_LUKEWARM = hex(0x45adf2);
 const WATER_COLD = hex(0x3d57d6);
 const WATER_FROZEN = hex(0x3938c9);
+const WATER_SWAMP = hex(0x617b64);
+const OCEANS = new Set([BIOMES.OCEAN, BIOMES.DEEP_OCEAN, BIOMES.BEACH, BIOMES.STONY_SHORE]);
 
 // Default colours for items and icons (Minecraft uses fixed colours outside the world too).
 export const ITEM_GRASS = hex(0x7cbd6b);
@@ -30,14 +46,16 @@ export const ITEM_FOLIAGE = hex(0x48b518);
 export const ITEM_WATER = WATER_DEFAULT;
 
 function waterColor(biome, temp) {
-  if (biome === BIOMES.OCEAN || biome === BIOMES.BEACH) {
+  if (biome === BIOMES.SWAMP) return WATER_SWAMP;
+  if (biome === BIOMES.FROZEN_OCEAN || biome === BIOMES.FROZEN_RIVER || biome === BIOMES.SNOWY_BEACH) return WATER_FROZEN;
+  if (OCEANS.has(biome)) {
     if (temp > 0.38) return WATER_WARM;
     if (temp > 0.2) return WATER_LUKEWARM;
     if (temp < -0.35) return WATER_FROZEN;
     if (temp < -0.18) return WATER_COLD;
     return WATER_DEFAULT;
   }
-  if (biome === BIOMES.SNOWY || (biome === BIOMES.RIVER && temp < -0.35)) return WATER_FROZEN;
+  if (biome === BIOMES.SNOWY || biome === BIOMES.SNOWY_TAIGA || (biome === BIOMES.RIVER && temp < SNOW_TEMP)) return WATER_FROZEN;
   return WATER_DEFAULT;
 }
 

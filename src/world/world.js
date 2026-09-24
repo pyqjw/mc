@@ -3,10 +3,10 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE, WORLD_HEIGHT, CHUNK_VOLUME, blockIndex, chunkKey } from '../constants.js';
 import {
-  B, BLOCKS, IS_OPAQUE, IS_SOLID, IS_FLUID, LIGHT_ATTEN, LIGHT_EMIT,
+  B, BLOCKS, IS_OPAQUE, IS_SOLID, IS_FLUID, LIGHT_ATTEN, LIGHT_EMIT, IS_LOG,
 } from './blocks.js';
-import { TerrainGenerator } from './generator.js';
-import { placeTree, treeHeight } from './trees.js';
+import { TerrainGenerator, SNOW_TEMP } from './generator.js';
+import { placeTree, treeHeight, saplingTree } from './trees.js';
 import { DIRS, attachedDir } from './shapes.js';
 import { mulberry32 } from './noise.js';
 import { SMELTING, SMELT_TIME, SMELT_XP } from '../crafting.js';
@@ -67,7 +67,7 @@ class WorkerPool {
 }
 
 const NEIGHBORS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-const SOIL = new Set([B.GRASS, B.DIRT, B.SNOWY_GRASS, B.FARMLAND]);
+const SOIL = new Set([B.GRASS, B.DIRT, B.SNOWY_GRASS, B.FARMLAND, B.PODZOL, B.COARSE_DIRT]);
 
 export class World {
   constructor({ seed, worldId, storage, scene, materials, workers = true }) {
@@ -178,7 +178,7 @@ export class World {
     if (old !== id && this.tiles.has(key) && !opts.keepTile) {
       const tile = this.tiles.get(key);
       this.tiles.delete(key);
-      if (this.game) for (const s of tile.items) if (s) this.game.dropItem(x + 0.5, y + 0.5, z + 0.5, s);
+      if (this.game && tile.items) for (const s of tile.items) if (s) this.game.dropItem(x + 0.5, y + 0.5, z + 0.5, s);
     }
     if (old !== id) {
       if (id === B.FURNACE && !this.tiles.has(key)) this.tiles.set(key, newFurnace());
@@ -191,7 +191,7 @@ export class World {
     if (opts.update !== false) {
       if (IS_FLUID[id]) this.schedule(x, y, z, id === B.WATER ? 5 : 30);
       for (const [dx, dy, dz] of NEIGHBORS) this.neighborChanged(x + dx, y + dy, z + dz);
-      if ((old === B.OAK_LOG || old === B.BIRCH_LOG || old === B.SPRUCE_LOG) && id !== old) this.scheduleLeafDecay(x, y, z);
+      if (IS_LOG[old] && id !== old) this.scheduleLeafDecay(x, y, z);
     }
     return true;
   }
@@ -287,6 +287,10 @@ export class World {
   hasSupportFor(x, y, z, kind, meta) {
     const d = kind === 'wall' ? DIRS[attachedDir(meta)] : kind === 'torch' && meta >= 1 && meta <= 4 ? DIRS[meta - 1] : null;
     if (kind === 'wall') return IS_OPAQUE[Math.max(0, this.getBlock(x + d[0], y, z + d[1]))] === 1;
+    if (kind === 'vine') {
+      const v = DIRS[attachedDir(meta)];
+      return IS_SOLID[Math.max(0, this.getBlock(x + v[0], y, z + v[1]))] === 1 || this.getBlock(x, y + 1, z) === B.VINE;
+    }
     if (kind === 'torch' && d) return IS_OPAQUE[Math.max(0, this.getBlock(x - d[0], y, z - d[1]))] === 1;
     if (kind === 'torch') {
       const below = this.getBlock(x, y - 1, z);
@@ -337,6 +341,11 @@ export class World {
         return false;
       }
       case 'mushroom': return IS_OPAQUE[below] === 1;
+      case 'water': return below === B.WATER || below === B.ICE;
+      case 'vine': {
+        const d = DIRS[attachedDir(this.getMeta(x, y, z))];
+        return IS_SOLID[Math.max(0, this.getBlock(x + d[0], y, z + d[1]))] === 1 || this.getBlock(x, y + 1, z) === B.VINE;
+      }
       default: return true;
     }
   }
@@ -384,9 +393,9 @@ export class World {
   }
 
   scheduleLeafDecay(x, y, z) {
-    for (let dy = -4; dy <= 4; dy++) {
-      for (let dz = -4; dz <= 4; dz++) {
-        for (let dx = -4; dx <= 4; dx++) {
+    for (let dy = -6; dy <= 6; dy++) {
+      for (let dz = -6; dz <= 6; dz++) {
+        for (let dx = -6; dx <= 6; dx++) {
           const id = this.getBlock(x + dx, y + dy, z + dz);
           if (id > 0 && BLOCKS[id].leaves && this.getMeta(x + dx, y + dy, z + dz) === 0) {
             this.schedule(x + dx, y + dy, z + dz, 20 + Math.floor(this.rand() * 200));
@@ -396,11 +405,11 @@ export class World {
     }
   }
 
-  // Natural leaves decay if no log is reachable within 4 leaf steps.
+  // Natural leaves decay if no log is reachable within 6 leaf steps.
   leafTick(x, y, z) {
     const seen = new Set([x + ',' + y + ',' + z]);
     let frontier = [[x, y, z]];
-    for (let d = 0; d < 4; d++) {
+    for (let d = 0; d < 6; d++) {
       const next = [];
       for (const [px, py, pz] of frontier) {
         for (const [dx, dy, dz] of NEIGHBORS) {
@@ -409,7 +418,7 @@ export class World {
           if (seen.has(k)) continue;
           seen.add(k);
           const id = this.getBlock(nx, ny, nz);
-          if (id === B.OAK_LOG || id === B.BIRCH_LOG || id === B.SPRUCE_LOG || id < 0) return;
+          if (IS_LOG[Math.max(0, id)] || id < 0) return;
           if (id > 0 && BLOCKS[id].leaves) next.push([nx, ny, nz]);
         }
       }
@@ -581,6 +590,9 @@ export class World {
       case B.OAK_SAPLING:
       case B.BIRCH_SAPLING:
       case B.SPRUCE_SAPLING:
+      case B.ACACIA_SAPLING:
+      case B.JUNGLE_SAPLING:
+      case B.DARK_OAK_SAPLING:
         if (this.getLight(x, y + 1, z) >= 9 && r() < 0.15) this.growTree(x, y, z, BLOCKS[id].sapling);
         break;
       case B.WHEAT: {
@@ -632,7 +644,7 @@ export class World {
     const top = this.heightAt(x, z);
     if (top < 1 || top >= H - 1) return;
     const id = this.getBlock(x, top, z);
-    const cold = top > 100 || this.generator.column(x, z).temp < -0.35;
+    const cold = top > 100 || this.generator.column(x, z).temp < SNOW_TEMP;
     if (cold && id === B.WATER && this.getMeta(x, top, z) === 0 && this.getBlockLight(x, top + 1, z) < 10) {
       this.setBlock(x, top, z, B.ICE);
       return;
@@ -648,22 +660,23 @@ export class World {
     }
   }
 
-  growTree(x, y, z, type) {
+  growTree(x, y, z, wood) {
     const rand = this.rand;
+    const type = saplingTree(wood, rand);
     const height = treeHeight(type, rand);
     for (let dy = 1; dy <= height + 1; dy++) {
       const id = this.getBlock(x, y + dy, z);
       if (id !== 0 && !(id > 0 && BLOCKS[id].leaves)) return false;
     }
     this.setBlock(x, y, z, B.AIR, { update: false });
-    const set = (bx, by, bz, id, overwrite) => {
+    const set = (bx, by, bz, id, overwrite, meta = 0) => {
       const cur = this.getBlock(bx, by, bz);
       if (cur < 0) return;
-      if (overwrite || cur === 0 || (cur > 0 && BLOCKS[cur].replaceable && !IS_FLUID[cur])) this.setBlock(bx, by, bz, id, { update: false });
+      if (overwrite || cur === 0 || (cur > 0 && BLOCKS[cur].replaceable && !IS_FLUID[cur])) this.setBlock(bx, by, bz, id, { update: false, meta });
     };
     placeTree(set, type, x, y, z, rand, height);
     const below = this.getBlock(x, y - 1, z);
-    if (below === B.GRASS || below === B.SNOWY_GRASS || below === B.FARMLAND) this.setBlock(x, y - 1, z, B.DIRT, { update: false });
+    if (below === B.GRASS || below === B.SNOWY_GRASS || below === B.FARMLAND || below === B.PODZOL) this.setBlock(x, y - 1, z, B.DIRT, { update: false });
     return true;
   }
 
@@ -918,6 +931,12 @@ export class World {
       if (c && c.state === 'loading') {
         c.blocks = msg.blocks;
         c.meta = msg.meta;
+        // Generated tile entities (dungeon chests and spawners), unless saved ones already exist.
+        for (const t of msg.tiles || []) {
+          const { x, y, z, ...data } = t;
+          const key = x + ',' + y + ',' + z;
+          if (!this.tiles.has(key)) this.tiles.set(key, data);
+        }
         this.chunkReady(c, true);
       }
     } else if (msg.type === 'meshed') {

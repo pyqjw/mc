@@ -55,6 +55,9 @@ item(294, 'paper', '纸');
 item(295, 'book', '书');
 item(296, 'snowball', '雪球', { stack: 16, throwable: 'snowball' });
 item(297, 'bowl', '碗');
+item(330, 'lapis_lazuli', '青金石');
+item(331, 'redstone', '红石粉');
+item(332, 'emerald', '绿宝石');
 item(298, 'mushroom_stew', '蘑菇煲', { stack: 1, food: { hunger: 6, saturation: 7.2, leaves: 297 } });
 
 export const TOOL_MATERIALS = [
@@ -140,8 +143,12 @@ export const FUEL = {
   [I.OAK_SAPLING]: 100,
   [I.BIRCH_SAPLING]: 100,
   [I.SPRUCE_SAPLING]: 100,
+  [I.ACACIA_SAPLING]: 100,
+  [I.JUNGLE_SAPLING]: 100,
+  [I.DARK_OAK_SAPLING]: 100,
 };
-for (const key of ['oak_planks', 'birch_planks', 'spruce_planks', 'oak_log', 'birch_log', 'spruce_log', 'crafting_table', 'chest']) {
+for (const key of ['oak_planks', 'birch_planks', 'spruce_planks', 'acacia_planks', 'jungle_planks', 'dark_oak_planks', 'oak_log', 'birch_log',
+  'spruce_log', 'acacia_log', 'jungle_log', 'dark_oak_log', 'crafting_table', 'chest']) {
   FUEL[I[key.toUpperCase()]] = 300;
 }
 for (const t of TOOL_TYPES) FUEL[toolId('wooden', t.key)] = 200;

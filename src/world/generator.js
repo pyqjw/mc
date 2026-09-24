@@ -1,8 +1,14 @@
-// Deterministic infinite terrain generator. Any chunk can be generated independently from the seed.
+// Deterministic infinite terrain generator, loosely following Minecraft 1.18+: climate noises
+// (continentalness, erosion, peaks & valleys, temperature, humidity) shape the land and pick the
+// biome; mountains get 3D overhangs; caves are spaghetti tunnels, cheese caverns, flooded aquifers
+// and ravines; features include ore veins, stone blobs, trees per biome, dungeons and wells.
+// Any chunk can be generated on its own from the seed.
 import { CHUNK_SIZE, WORLD_HEIGHT, SEA_LEVEL, CHUNK_VOLUME, blockIndex } from '../constants.js';
 import { B, IS_SOLID } from './blocks.js';
 import { SimplexNoise, mulberry32, hash3, hashFloat } from './noise.js';
-import { placeTree } from './trees.js';
+import { placeTree, TREE_RADIUS } from './trees.js';
+
+const H = WORLD_HEIGHT;
 
 export const BIOMES = {
   OCEAN: 0,
@@ -15,20 +21,72 @@ export const BIOMES = {
   MOUNTAINS: 7,
   RIVER: 8,
   BIRCH_FOREST: 9,
+  SAVANNA: 10,
+  JUNGLE: 11,
+  SWAMP: 12,
+  DARK_FOREST: 13,
+  BADLANDS: 14,
+  DEEP_OCEAN: 15,
+  STONY_PEAKS: 16,
+  SNOWY_PEAKS: 17,
+  SNOWY_TAIGA: 18,
+  STONY_SHORE: 19,
+  FROZEN_RIVER: 20,
+  MEADOW: 21,
+  FROZEN_OCEAN: 22,
+  SNOWY_BEACH: 23,
 };
-export const BIOME_NAMES = ['海洋', '沙滩', '平原', '森林', '沙漠', '针叶林', '雪原', '山地', '河流', '桦木森林'];
+export const BIOME_NAMES = [
+  '海洋', '沙滩', '平原', '森林', '沙漠', '针叶林', '雪原', '风袭丘陵', '河流', '桦木森林', '热带草原', '丛林', '沼泽',
+  '黑森林', '恶地', '深海', '裸岩山峰', '积雪山峰', '积雪针叶林', '石岸', '冻河', '草甸', '冻洋', '积雪沙滩',
+];
+
+// Below this temperature precipitation is snow and water freezes.
+export const SNOW_TEMP = -0.45;
+
+// Biomes where the ground is water.
+export const WATER_BIOMES = new Set([BIOMES.OCEAN, BIOMES.DEEP_OCEAN, BIOMES.FROZEN_OCEAN, BIOMES.RIVER, BIOMES.FROZEN_RIVER]);
+
+// Trees: [type, weight] lists and trees per column for each biome.
+const TREES = [];
+const TREE_DENSITY = new Float32Array(32);
+function trees(biome, density, list) {
+  TREE_DENSITY[biome] = density;
+  TREES[biome] = list;
+}
+trees(BIOMES.PLAINS, 0.003, [['oak', 8], ['fancy_oak', 1]]);
+trees(BIOMES.FOREST, 0.045, [['oak', 10], ['birch', 3], ['fancy_oak', 1]]);
+trees(BIOMES.BIRCH_FOREST, 0.045, [['birch', 8], ['tall_birch', 2]]);
+trees(BIOMES.DARK_FOREST, 0.07, [['dark_oak', 10], ['oak', 1], ['birch', 1]]);
+trees(BIOMES.TAIGA, 0.035, [['spruce', 3], ['pine', 1]]);
+trees(BIOMES.SNOWY_TAIGA, 0.03, [['spruce', 3], ['pine', 1]]);
+trees(BIOMES.SNOWY, 0.004, [['spruce', 1]]);
+trees(BIOMES.MOUNTAINS, 0.008, [['spruce', 1], ['oak', 1]]);
+trees(BIOMES.SAVANNA, 0.006, [['acacia', 5], ['oak', 1]]);
+trees(BIOMES.JUNGLE, 0.09, [['jungle', 4], ['jungle_bush', 5], ['mega_jungle', 1], ['fancy_oak', 1]]);
+trees(BIOMES.SWAMP, 0.012, [['swamp_oak', 1]]);
+trees(BIOMES.MEADOW, 0.0006, [['birch', 1], ['oak', 1]]);
+trees(BIOMES.BADLANDS, 0.0004, [['oak', 1]]);
+let MAX_TREE_DENSITY = 0;
+for (const d of TREE_DENSITY) MAX_TREE_DENSITY = Math.max(MAX_TREE_DENSITY, d);
 
 // Flower kinds per biome.
 const FLOWERS = {
   [BIOMES.PLAINS]: [B.DANDELION, B.POPPY, B.AZURE_BLUET, B.OXEYE_DAISY, B.CORNFLOWER, B.RED_TULIP, B.ORANGE_TULIP, B.WHITE_TULIP, B.PINK_TULIP],
+  [BIOMES.MEADOW]: [B.DANDELION, B.POPPY, B.AZURE_BLUET, B.OXEYE_DAISY, B.CORNFLOWER, B.ALLIUM],
   [BIOMES.FOREST]: [B.DANDELION, B.POPPY, B.LILY_OF_THE_VALLEY, B.ALLIUM],
-  [BIOMES.BIRCH_FOREST]: [B.DANDELION, B.POPPY, B.LILY_OF_THE_VALLEY, B.BLUE_ORCHID],
+  [BIOMES.BIRCH_FOREST]: [B.DANDELION, B.POPPY, B.LILY_OF_THE_VALLEY],
+  [BIOMES.DARK_FOREST]: [B.POPPY, B.LILY_OF_THE_VALLEY],
+  [BIOMES.SWAMP]: [B.BLUE_ORCHID],
+  [BIOMES.JUNGLE]: [B.POPPY, B.DANDELION],
+  [BIOMES.SAVANNA]: [B.DANDELION, B.POPPY],
   default: [B.DANDELION, B.POPPY],
 };
 
-// Trees per column for each biome.
-const TREE_DENSITY = [0, 0, 0.004, 0.045, 0, 0.03, 0.008, 0.006, 0, 0.04];
-const MAX_TREE_DENSITY = 0.045;
+// Badlands terracotta bands, bottom to top.
+const BANDS = [B.TERRACOTTA, B.ORANGE_TERRACOTTA, B.TERRACOTTA, B.YELLOW_TERRACOTTA, B.TERRACOTTA, B.BROWN_TERRACOTTA,
+  B.TERRACOTTA, B.RED_TERRACOTTA, B.ORANGE_TERRACOTTA, B.WHITE_TERRACOTTA, B.TERRACOTTA, B.LIGHT_GRAY_TERRACOTTA,
+  B.ORANGE_TERRACOTTA, B.TERRACOTTA, B.RED_TERRACOTTA, B.TERRACOTTA];
 
 function smoothstep(e0, e1, x) {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
@@ -41,7 +99,7 @@ function lerp(a, b, t) {
 
 // Continentalness -> base height spline.
 const SPLINE = [
-  [-1.0, 28], [-0.45, 38], [-0.25, 50], [-0.12, 59], [-0.05, 63], [0.05, 66], [0.3, 72], [0.6, 80], [1.0, 88],
+  [-1.0, 24], [-0.55, 30], [-0.35, 40], [-0.2, 52], [-0.12, 59], [-0.06, 62], [0.02, 64], [0.15, 67], [0.35, 72], [0.6, 78], [1.0, 86],
 ];
 function spline(c) {
   if (c <= SPLINE[0][0]) return SPLINE[0][1];
@@ -56,13 +114,72 @@ function spline(c) {
   return SPLINE[SPLINE.length - 1][1];
 }
 
+function pickWeighted(list, r) {
+  let total = 0;
+  for (const [, w] of list) total += w;
+  let t = r * total;
+  for (const [v, w] of list) {
+    t -= w;
+    if (t <= 0) return v;
+  }
+  return list[list.length - 1][0];
+}
+
+// Coarse 3D noise grid for a chunk (every 4 blocks horizontally, 4 vertically) with trilinear
+// interpolation, like Minecraft's noise caves. fn(x, y, z) is evaluated at the grid points.
+const GX = 5;
+const GY = H / 4 + 1;
+class Grid3 {
+  constructor() {
+    this.v = new Float32Array(GX * GX * GY);
+  }
+
+  fill(x0, z0, fn) {
+    let i = 0;
+    for (let gy = 0; gy < GY; gy++) {
+      for (let gz = 0; gz < GX; gz++) {
+        for (let gx = 0; gx < GX; gx++) this.v[i++] = fn(x0 + gx * 4, gy * 4, z0 + gz * 4);
+      }
+    }
+  }
+
+  at(lx, y, lz) {
+    const fx = lx / 4;
+    const fy = y / 4;
+    const fz = lz / 4;
+    const ix = Math.min(GX - 2, fx | 0);
+    const iy = Math.min(GY - 2, fy | 0);
+    const iz = Math.min(GX - 2, fz | 0);
+    const tx = fx - ix;
+    const ty = fy - iy;
+    const tz = fz - iz;
+    const v = this.v;
+    const i000 = ix + iz * GX + iy * GX * GX;
+    const i100 = i000 + 1;
+    const i010 = i000 + GX * GX;
+    const i110 = i010 + 1;
+    const i001 = i000 + GX;
+    const i101 = i001 + 1;
+    const i011 = i010 + GX;
+    const i111 = i011 + 1;
+    const a = v[i000] + (v[i100] - v[i000]) * tx;
+    const b = v[i001] + (v[i101] - v[i001]) * tx;
+    const c = v[i010] + (v[i110] - v[i010]) * tx;
+    const d = v[i011] + (v[i111] - v[i011]) * tx;
+    const e = a + (b - a) * tz;
+    const f = c + (d - c) * tz;
+    return e + (f - e) * ty;
+  }
+}
+
 export class TerrainGenerator {
   constructor(seed) {
     this.seed = seed | 0;
     const rand = mulberry32(this.seed);
     this.continental = new SimplexNoise(rand);
+    this.erosion = new SimplexNoise(rand);
+    this.weird = new SimplexNoise(rand);
     this.hills = new SimplexNoise(rand);
-    this.mountain = new SimplexNoise(rand);
     this.ridge = new SimplexNoise(rand);
     this.temperature = new SimplexNoise(rand);
     this.humidity = new SimplexNoise(rand);
@@ -70,204 +187,539 @@ export class TerrainGenerator {
     this.cave1 = new SimplexNoise(rand);
     this.cave2 = new SimplexNoise(rand);
     this.cave3 = new SimplexNoise(rand);
-    this.detail = new SimplexNoise(rand);
+    this.caveThick = new SimplexNoise(rand);
+    this.overhang = new SimplexNoise(rand);
+    this.aquifer = new SimplexNoise(rand);
+    this.ravine = new SimplexNoise(rand);
+    this.surface = new SimplexNoise(rand);
+    this.pillars = new SimplexNoise(rand);
+    this.grids = [new Grid3(), new Grid3(), new Grid3(), new Grid3()];
   }
 
-  // Height and biome of a world column. Pure function of (x, z).
+  // Climate, height and biome of a world column. Pure function of (x, z).
   column(x, z) {
-    const c = this.continental.fbm2(x / 700, z / 700, 5) * 1.3 + 0.12;
+    const c = this.continental.fbm2(x / 900, z / 900, 5) * 1.35 + 0.08;
+    const e = this.erosion.fbm2(x / 650 + 30, z / 650 - 20, 4) * 1.6;
+    const w = this.weird.fbm2(x / 400 - 70, z / 400 + 40, 4) * 1.6;
+    const pv = 1 - Math.abs(3 * Math.abs(w) - 2); // peaks (1) and valleys (-1)
+    const land = smoothstep(-0.14, 0.02, c);
     let h = spline(c);
-    const land = smoothstep(-0.12, 0.05, c);
-    const hill = this.hills.fbm2(x / 140, z / 140, 4);
-    h += hill * lerp(3, 9, land);
 
-    const m = this.mountain.fbm2(x / 450, z / 450, 3);
-    const mountainFactor = smoothstep(0.15, 0.55, m) * land;
-    if (mountainFactor > 0) {
-      const r = 1 - Math.abs(this.ridge.fbm2(x / 180, z / 180, 4));
-      h += mountainFactor * (r * r * 55 + 8);
+    // Rolling hills, more of them where erosion is low.
+    const rugged = smoothstep(0.6, -0.6, e);
+    h += this.hills.fbm2(x / 110, z / 110, 4) * lerp(2, 10, rugged) * land;
+    h += pv * lerp(1.5, 7, rugged) * land;
+
+    // Mountains: far inland, low erosion; jagged ridges raised further on peaks.
+    const m = smoothstep(-0.05, -0.55, e) * smoothstep(0.05, 0.4, c);
+    if (m > 0) {
+      const r = 1 - Math.abs(this.ridge.fbm2(x / 170, z / 170, 5));
+      h += m * (r * r * 48 + 8) * (0.65 + 0.35 * Math.max(0, pv));
     }
 
-    // Rivers carve valleys through land.
-    const rv = Math.abs(this.river.fbm2(x / 900, z / 900, 3));
+    // Rivers carve valleys through the land.
+    const rv = Math.abs(this.river.fbm2(x / 850, z / 850, 3));
     let river = 0;
-    if (land > 0.5 && rv < 0.05) {
-      river = 1 - rv / 0.05;
-      const bed = SEA_LEVEL - 3;
-      const t = smoothstep(0, 0.6, river) * (1 - mountainFactor * 0.6);
-      h = lerp(h, bed, t);
+    if (land > 0.4 && rv < 0.045) {
+      river = 1 - rv / 0.045;
+      const t = smoothstep(0, 0.6, river) * (1 - m * 0.7);
+      h = lerp(h, SEA_LEVEL - 4, t);
     }
 
-    h = Math.max(6, Math.min(WORLD_HEIGHT - 8, Math.round(h)));
+    let temp = this.temperature.fbm2(x / 1400, z / 1400, 2) * 1.45;
+    const hum = this.humidity.fbm2(x / 950 + 50, z / 950 + 50, 3) * 1.5;
 
-    const temp = this.temperature.fbm2(x / 1000, z / 1000, 3) - Math.max(0, h - 90) * 0.012;
-    const hum = this.humidity.fbm2(x / 900 + 50, z / 900 + 50, 3);
-
+    // Pick the biome from the climate (a simplified Minecraft biome table).
     let biome;
-    if (h < SEA_LEVEL - 1 && river > 0.3) biome = BIOMES.RIVER;
-    else if (h < SEA_LEVEL - 2) biome = BIOMES.OCEAN;
-    else if (h <= SEA_LEVEL + 1 && mountainFactor < 0.2 && temp > -0.3) biome = BIOMES.BEACH;
-    else if (mountainFactor > 0.45 && h > 85) biome = BIOMES.MOUNTAINS;
-    else if (temp > 0.3 && hum < 0.05) biome = BIOMES.DESERT;
-    else if (temp < -0.35) biome = BIOMES.SNOWY;
-    else if (temp < -0.12) biome = BIOMES.TAIGA;
-    else if (hum > 0.3) biome = BIOMES.BIRCH_FOREST;
-    else if (hum > 0.08) biome = BIOMES.FOREST;
-    else biome = BIOMES.PLAINS;
-    return { h, biome, temp };
-  }
-
-  // True where caves carve out solid rock.
-  isCave(x, y, z, surface, underwater) {
-    if (y <= 4) return false;
-    if (underwater && y > surface - 6) return false;
-    if (y > surface) return false;
-    const a = this.cave1.noise3(x / 48, y / 32, z / 48);
-    const b = this.cave2.noise3(x / 48, y / 32, z / 48);
-    if (a * a + b * b < 0.0065) return true;
-    if (y < 48) {
-      const cheese = this.cave3.noise3(x / 80, y / 40, z / 80);
-      if (cheese > 0.62 - (48 - y) * 0.002) return true;
+    const hRaw = h;
+    const chill = Math.max(0, hRaw - 88) * 0.02;
+    if (hRaw < SEA_LEVEL - 1 && river > 0.3) {
+      biome = temp < SNOW_TEMP ? BIOMES.FROZEN_RIVER : BIOMES.RIVER;
+    } else if (hRaw < SEA_LEVEL - 1) {
+      if (temp < SNOW_TEMP - 0.1) biome = BIOMES.FROZEN_OCEAN;
+      else biome = c < -0.4 ? BIOMES.DEEP_OCEAN : BIOMES.OCEAN;
+    } else if (hRaw <= SEA_LEVEL + 2 && c < 0.03 && m < 0.2) {
+      if (e < -0.35) biome = BIOMES.STONY_SHORE;
+      else if (temp < SNOW_TEMP) biome = BIOMES.SNOWY_BEACH;
+      else biome = BIOMES.BEACH;
+    } else if (m > 0.45 && hRaw > 92) {
+      biome = temp - chill < -0.25 ? BIOMES.SNOWY_PEAKS : BIOMES.STONY_PEAKS;
+    } else if (m > 0.2 && hRaw > 84) {
+      biome = hum > -0.05 && temp > -0.3 && temp < 0.35 && pv < 0.6 ? BIOMES.MEADOW : BIOMES.MOUNTAINS;
+    } else if (temp < SNOW_TEMP) {
+      biome = hum > 0 ? BIOMES.SNOWY_TAIGA : BIOMES.SNOWY;
+    } else if (temp < -0.15) {
+      biome = hum > -0.15 ? BIOMES.TAIGA : BIOMES.PLAINS;
+    } else if (temp < 0.25) {
+      if (hum > 0.15 && e > -0.1 && hRaw <= SEA_LEVEL + 8) biome = BIOMES.SWAMP;
+      else if (hum < -0.25) biome = BIOMES.PLAINS;
+      else if (hum < 0.05) biome = BIOMES.FOREST;
+      else if (hum < 0.3) biome = BIOMES.BIRCH_FOREST;
+      else biome = BIOMES.DARK_FOREST;
+    } else if (temp < 0.42) {
+      if (hum < -0.1) biome = BIOMES.SAVANNA;
+      else if (hum < 0.25) biome = hum < 0.05 ? BIOMES.PLAINS : BIOMES.FOREST;
+      else biome = BIOMES.JUNGLE;
+    } else if (hum < -0.05) {
+      biome = w > 0.05 && e > -0.3 ? BIOMES.BADLANDS : BIOMES.DESERT;
+    } else if (hum < 0.25) {
+      biome = BIOMES.SAVANNA;
+    } else {
+      biome = BIOMES.JUNGLE;
     }
-    return false;
+
+    // Swamps sit right at the water line.
+    if (biome === BIOMES.SWAMP) {
+      h = lerp(h, SEA_LEVEL + this.surface.noise2(x / 12, z / 12) * 1.6, 0.85);
+    }
+    // Badlands rise in flat-topped terraces, fading out towards neighbouring biomes.
+    if (temp > 0.37 && hum < 0 && w > 0 && biome !== BIOMES.RIVER) {
+      const bad = smoothstep(0.37, 0.5, temp) * smoothstep(0, -0.12, hum) * smoothstep(0, 0.12, w) * smoothstep(-0.35, -0.2, e);
+      const plateau = smoothstep(0.15, 0.5, w) * smoothstep(0.05, 0.3, c) * bad;
+      if (plateau > 0.02) {
+        const top = h + plateau * 24;
+        const terraced = Math.floor(top / 5) * 5 + Math.min(4, (top % 5) * 0.4);
+        h = lerp(top, terraced, Math.min(1, plateau * 5));
+      }
+    }
+
+    h = Math.max(6, Math.min(H - 8, Math.round(h)));
+    temp -= Math.max(0, h - 88) * 0.02;
+    return { h, biome, temp, hum, m, c, e, river };
   }
 
+  // ------------------------------------------------------------ chunk generation
   generateChunk(cx, cz) {
     const blocks = new Uint8Array(CHUNK_VOLUME);
     const meta = new Uint8Array(CHUNK_VOLUME);
     const x0 = cx * CHUNK_SIZE;
     const z0 = cz * CHUNK_SIZE;
-    const heights = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
-    const biomes = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
     const seed = this.seed;
+    const heights = new Int16Array(256);
+    const biomes = new Uint8Array(256);
+    const temps = new Float32Array(256);
+    const tiles = [];
 
-    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+    // Column data with a 1-block border (for slopes).
+    const cols = [];
+    for (let z = -1; z <= 16; z++) for (let x = -1; x <= 16; x++) cols.push(this.column(x0 + x, z0 + z));
+    const col = (lx, lz) => cols[(lx + 1) + (lz + 1) * 18];
+
+    // 3D noise grids: two tunnel noises, caverns and mountain overhangs.
+    const [g1, g2, g3, g4] = this.grids;
+    g1.fill(x0, z0, (x, y, z) => this.cave1.noise3(x / 55, y / 32, z / 55));
+    g2.fill(x0, z0, (x, y, z) => this.cave2.noise3(x / 55, y / 32, z / 55));
+    g3.fill(x0, z0, (x, y, z) => this.cave3.noise3(x / 75, y / 36, z / 75) - 0.35 * this.pillars.noise3(x / 14, y / 30, z / 14));
+    g4.fill(x0, z0, (x, y, z) => this.overhang.fbm3(x / 26, y / 18, z / 26, 2));
+
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
         const wx = x0 + lx;
         const wz = z0 + lz;
-        const { h, biome, temp } = this.column(wx, wz);
+        const info = col(lx, lz);
+        const { h, biome, temp, m } = info;
         heights[lx + lz * 16] = h;
         biomes[lx + lz * 16] = biome;
-        const underwater = h < SEA_LEVEL;
-        const cold = temp < -0.35;
+        temps[lx + lz * 16] = temp;
+        const slope = Math.max(
+          Math.abs(col(lx + 1, lz).h - h), Math.abs(col(lx - 1, lz).h - h),
+          Math.abs(col(lx, lz + 1).h - h), Math.abs(col(lx, lz - 1).h - h),
+        );
+        const cold = temp < SNOW_TEMP;
 
-        let top;
-        let filler;
-        let fillerDepth = 3 + (hash3(seed, wx, 1, wz) & 1);
-        switch (biome) {
-          case BIOMES.DESERT: top = B.SAND; filler = B.SAND; fillerDepth = 4; break;
-          case BIOMES.BEACH: top = cold ? B.GRAVEL : B.SAND; filler = B.SAND; break;
-          case BIOMES.OCEAN: top = h < SEA_LEVEL - 12 ? B.GRAVEL : (hash3(seed, wx, 2, wz) % 7 === 0 ? B.CLAY : B.SAND); filler = B.SAND; break;
-          case BIOMES.RIVER: top = hash3(seed, wx, 2, wz) % 5 === 0 ? B.CLAY : B.SAND; filler = B.SAND; break;
-          case BIOMES.SNOWY: top = B.SNOWY_GRASS; filler = B.DIRT; break;
-          case BIOMES.MOUNTAINS:
-            if (h > 100) { top = B.SNOW_BLOCK; filler = B.STONE; } else if (h > 92) { top = B.STONE; filler = B.STONE; } else { top = B.GRASS; filler = B.DIRT; }
-            break;
-          default: top = B.GRASS; filler = B.DIRT;
-        }
-        if (underwater && (top === B.GRASS || top === B.SNOWY_GRASS)) top = B.DIRT;
+        // Solid terrain: the height map, bent into cliffs and overhangs in the mountains.
+        const amp = m > 0.25 ? (m - 0.25) * 20 : 0;
+        const yTop = Math.min(H - 2, h + Math.ceil(amp));
+        const solidAt = (y) => {
+          if (y <= h - amp) return true;
+          if (amp === 0) return y <= h;
+          return (h - y) + g4.at(lx, y, lz) * amp * 1.4 > 0;
+        };
 
+        // Surface materials.
+        const surf = this.surfaceFor(info, slope, wx, wz);
         const bedrockTop = 1 + (hash3(seed, wx, 0, wz) % 4);
-        for (let y = 0; y <= h; y++) {
+        let depth = -1;
+        for (let y = yTop; y >= 0; y--) {
+          const idx = blockIndex(lx, y, lz);
+          if (!solidAt(y)) {
+            depth = -1;
+            continue;
+          }
+          depth++;
           let id;
           if (y <= bedrockTop && (y === 0 || hashFloat(seed, wx, y, wz) < 0.6)) id = B.BEDROCK;
-          else if (y === h) id = top;
-          else if (y > h - fillerDepth) id = filler;
-          else if (biome === BIOMES.DESERT && y > h - fillerDepth - 3) id = B.SANDSTONE;
+          else if (biome === BIOMES.BADLANDS && depth < 18 && y > 50) {
+            id = depth === 0 && y < 90 ? B.RED_SAND : depth < 2 && y < 90 ? B.RED_SAND : BANDS[(y + Math.floor(this.surface.noise2(wx / 60, wz / 60) * 3) + 32) % BANDS.length];
+          } else if (depth === 0) id = y < SEA_LEVEL - 1 && surf.top === B.GRASS ? surf.under : y >= SEA_LEVEL - 1 || !surf.wet ? surf.top : surf.wet;
+          else if (depth < surf.depth) id = surf.filler;
+          else if (surf.stoneLayer && depth < surf.depth + 4) id = surf.stoneLayer;
           else id = B.STONE;
-          if (id !== B.BEDROCK && this.isCave(wx, y, wz, h, underwater || biome === BIOMES.RIVER)) {
-            id = y <= 10 ? B.LAVA : B.AIR;
-          }
-          blocks[blockIndex(lx, y, lz)] = id;
+          blocks[idx] = id;
         }
-        for (let y = h + 1; y <= SEA_LEVEL; y++) {
-          blocks[blockIndex(lx, y, lz)] = (y === SEA_LEVEL && cold) ? B.ICE : B.WATER;
+        // Water up to sea level; frozen at the top in cold places.
+        for (let y = SEA_LEVEL; y > 0; y--) {
+          const idx = blockIndex(lx, y, lz);
+          if (blocks[idx] !== B.AIR) break;
+          blocks[idx] = y === SEA_LEVEL && cold ? B.ICE : B.WATER;
         }
+
+        // Caves (after the surface, so cave floors stay stone).
+        this.carveColumn(blocks, lx, lz, wx, wz, info, g1, g2, g3);
       }
     }
 
-    this.placeOres(blocks, cx, cz);
-    this.placePlants(blocks, heights, biomes, cx, cz);
-    this.placeTrees(blocks, cx, cz);
-    this.placeSnow(blocks, cx, cz);
-    return { blocks, meta, heights, biomes };
+    const rand = mulberry32(hash3(seed, cx, 77, cz));
+    this.placeOres(blocks, cx, cz, rand, biomes);
+    this.placeDungeon(blocks, meta, cx, cz, heights, tiles);
+    this.placeFeatures(blocks, meta, heights, biomes, cx, cz);
+    this.placePlants(blocks, meta, heights, biomes, cx, cz);
+    this.placeTrees(blocks, meta, cx, cz);
+    this.placeSnow(blocks, cx, cz, heights, temps);
+    return { blocks, meta, heights, biomes, tiles };
   }
 
-  placeOres(blocks, cx, cz) {
-    const rand = mulberry32(hash3(this.seed, cx, 77, cz));
-    const ores = [
-      // id, veins per chunk, vein size, min y, max y
-      [B.COAL_ORE, 20, 12, 5, 120],
-      [B.IRON_ORE, 14, 8, 5, 64],
-      [B.GOLD_ORE, 3, 8, 5, 32],
-      [B.DIAMOND_ORE, 1.5, 6, 5, 16],
-      [B.GRAVEL, 6, 20, 5, 100],
-      [B.DIRT, 6, 20, 5, 100],
+  // Top block, filler and depth for a column.
+  surfaceFor(info, slope, wx, wz) {
+    const { biome, h } = info;
+    const n = this.surface.noise2(wx / 9, wz / 9);
+    const r = hashFloat(this.seed, wx, 5, wz);
+    const s = { top: B.GRASS, under: B.DIRT, filler: B.DIRT, depth: 3 + (r < 0.5 ? 1 : 0), wet: null, stoneLayer: null };
+    switch (biome) {
+      case BIOMES.DESERT:
+        s.top = B.SAND; s.filler = B.SAND; s.depth = 4; s.stoneLayer = B.SANDSTONE; break;
+      case BIOMES.BEACH:
+        s.top = B.SAND; s.filler = B.SAND; s.stoneLayer = B.SANDSTONE; break;
+      case BIOMES.SNOWY_BEACH:
+        s.top = B.SAND; s.filler = B.SAND; break;
+      case BIOMES.STONY_SHORE:
+        s.top = n > 0.2 ? B.GRAVEL : B.STONE; s.filler = B.STONE; break;
+      case BIOMES.OCEAN:
+      case BIOMES.FROZEN_OCEAN:
+        s.top = h < SEA_LEVEL - 14 ? B.GRAVEL : n > 0.45 ? B.CLAY : n < -0.4 ? B.GRAVEL : B.SAND; s.filler = B.SAND; break;
+      case BIOMES.DEEP_OCEAN:
+        s.top = n > 0.3 ? B.SAND : B.GRAVEL; s.filler = B.GRAVEL; break;
+      case BIOMES.RIVER:
+      case BIOMES.FROZEN_RIVER:
+        s.top = n > 0.35 ? B.CLAY : n < -0.35 ? B.GRAVEL : B.SAND; s.filler = B.SAND; break;
+      case BIOMES.SNOWY:
+      case BIOMES.SNOWY_TAIGA:
+        s.top = B.SNOWY_GRASS; break;
+      case BIOMES.TAIGA:
+        if (n > 0.35) s.top = B.PODZOL;
+        else if (n < -0.55) s.top = B.COARSE_DIRT;
+        break;
+      case BIOMES.SAVANNA:
+        if (n > 0.5) s.top = B.COARSE_DIRT;
+        break;
+      case BIOMES.SWAMP:
+        s.wet = B.CLAY;
+        break;
+      case BIOMES.DARK_FOREST:
+        if (n > 0.6) s.top = B.PODZOL;
+        break;
+      case BIOMES.STONY_PEAKS:
+        s.top = n > 0.4 ? B.GRAVEL : n < -0.3 ? B.ANDESITE : B.STONE; s.filler = B.STONE; break;
+      case BIOMES.SNOWY_PEAKS:
+        s.top = slope > 2 ? B.STONE : B.SNOW_BLOCK; s.filler = slope > 2 ? B.STONE : B.SNOW_BLOCK; s.depth = 2; break;
+      case BIOMES.MOUNTAINS:
+        if (h > 102) { s.top = B.SNOW_BLOCK; s.filler = B.STONE; } else if (n > 0.55) { s.top = B.GRAVEL; s.filler = B.GRAVEL; }
+        break;
+      default:
+    }
+    // Steep slopes show bare stone (or gravel), like Minecraft's mountains.
+    if (slope >= 4 && s.top !== B.SAND && s.top !== B.SNOW_BLOCK && biome !== BIOMES.BADLANDS) {
+      s.top = n > 0.3 ? B.GRAVEL : B.STONE;
+      s.filler = B.STONE;
+    }
+    return s;
+  }
+
+  // Carves caves into one column: tunnels, caverns with pillars, flooded aquifers and ravines.
+  carveColumn(blocks, lx, lz, wx, wz, info, g1, g2, g3) {
+    const { h, biome } = info;
+    const underwater = h < SEA_LEVEL || WATER_BIOMES.has(biome) || biome === BIOMES.SWAMP;
+    const top = underwater ? h - 7 : h;
+    // Ravines: long narrow cracks in some regions.
+    const rv = Math.abs(this.ravine.noise2(wx / 180, wz / 180));
+    const ravineRegion = this.ravine.noise2(wx / 700 + 91, wz / 700 - 13) > 0.45;
+    const ravineW = ravineRegion ? 0.028 : 0;
+    const ravineBottom = 18 + Math.floor(this.ravine.noise2(wx / 40, wz / 40) * 6);
+    const aquiferOn = this.aquifer.noise2(wx / 160, wz / 160) > 0.15;
+    const aquiferLevel = 16 + Math.floor((this.aquifer.noise2(wx / 90 + 7, wz / 90) + 1) * 8);
+    const thick = 0.004 + 0.008 * (this.caveThick.noise2(wx / 200, wz / 200) + 1) * 0.5;
+    for (let y = 5; y <= top; y++) {
+      const idx = blockIndex(lx, y, lz);
+      const id = blocks[idx];
+      if (id === B.AIR || id === B.WATER || id === B.BEDROCK || id === B.ICE) continue;
+      let carve = false;
+      const a = g1.at(lx, y, lz);
+      const b = g2.at(lx, y, lz);
+      if (a * a + b * b < thick) carve = true;
+      else if (y < 56) {
+        const cheese = g3.at(lx, y, lz);
+        if (cheese > 0.58 - (56 - y) * 0.004) carve = true;
+      }
+      if (!carve && ravineW > 0 && y >= ravineBottom) {
+        const mid = (ravineBottom + h) / 2;
+        const width = ravineW * (1 - Math.abs(y - mid) / Math.max(1, h - ravineBottom) * 0.9);
+        if (rv < width && !underwater) carve = true;
+      }
+      if (!carve) continue;
+      if (y <= 10) blocks[idx] = B.LAVA;
+      else if (aquiferOn && y <= aquiferLevel && y < h - 8) blocks[idx] = B.WATER;
+      else blocks[idx] = B.AIR;
+    }
+  }
+
+  // ------------------------------------------------------------ ores and stone
+  // Minecraft-style vein: ellipsoids along a short line.
+  vein(blocks, rand, id, size, x, y, z, replace) {
+    const a = rand() * Math.PI;
+    const len = size / 8;
+    const x1 = x + Math.sin(a) * len;
+    const x2 = x - Math.sin(a) * len;
+    const z1 = z + Math.cos(a) * len;
+    const z2 = z - Math.cos(a) * len;
+    const y1 = y + rand() * 3 - 1;
+    const y2 = y + rand() * 3 - 1;
+    for (let i = 0; i < size; i++) {
+      const t = i / size;
+      const cxv = x1 + (x2 - x1) * t;
+      const cyv = y1 + (y2 - y1) * t;
+      const czv = z1 + (z2 - z1) * t;
+      const r = ((Math.sin(Math.PI * t) + 1) * (rand() * size / 16) + 1) / 2;
+      const r2 = r * r;
+      for (let bx = Math.floor(cxv - r); bx <= Math.floor(cxv + r); bx++) {
+        if (bx < 0 || bx > 15) continue;
+        for (let bz = Math.floor(czv - r); bz <= Math.floor(czv + r); bz++) {
+          if (bz < 0 || bz > 15) continue;
+          for (let by = Math.floor(cyv - r); by <= Math.floor(cyv + r); by++) {
+            if (by < 1 || by >= H) continue;
+            const dx = bx + 0.5 - cxv;
+            const dy = by + 0.5 - cyv;
+            const dz = bz + 0.5 - czv;
+            if (dx * dx + dy * dy + dz * dz > r2) continue;
+            const idx = blockIndex(bx, by, bz);
+            if (replace(blocks[idx])) blocks[idx] = id;
+          }
+        }
+      }
+    }
+  }
+
+  placeOres(blocks, cx, cz, rand, biomes) {
+    const stone = (id) => id === B.STONE || id === B.GRANITE || id === B.DIORITE || id === B.ANDESITE;
+    const onlyStone = (id) => id === B.STONE;
+    const mountains = biomes.some((b) => b === BIOMES.MOUNTAINS || b === BIOMES.STONY_PEAKS || b === BIOMES.SNOWY_PEAKS || b === BIOMES.MEADOW);
+    const badlands = biomes.some((b) => b === BIOMES.BADLANDS);
+    // [id, veins per chunk, size, min y, max y, triangular?]
+    const list = [
+      [B.GRANITE, 2, 33, 5, 90], [B.DIORITE, 2, 33, 5, 90], [B.ANDESITE, 2, 33, 5, 90],
+      [B.GRAVEL, 4, 30, 5, 100], [B.DIRT, 5, 30, 5, 100],
+      [B.COAL_ORE, 18, 17, 5, 125], [B.IRON_ORE, 12, 9, 5, 72, true], [B.GOLD_ORE, 3, 9, 5, 34, true],
+      [B.REDSTONE_ORE, 4, 8, 5, 18], [B.LAPIS_ORE, 1.5, 7, 5, 32, true], [B.DIAMOND_ORE, 1.5, 7, 5, 16],
     ];
-    for (const [id, veins, size, minY, maxY] of ores) {
+    if (mountains) list.push([B.IRON_ORE, 8, 9, 80, 125], [B.COAL_ORE, 6, 17, 90, 125]);
+    if (badlands) list.push([B.GOLD_ORE, 6, 9, 32, 80]);
+    for (const [id, veins, size, minY, maxY, tri] of list) {
       const count = Math.floor(veins) + (rand() < veins % 1 ? 1 : 0);
       for (let v = 0; v < count; v++) {
-        let x = rand() * 16;
-        let y = minY + rand() * (maxY - minY);
-        let z = rand() * 16;
-        const n = 1 + Math.floor(rand() * size);
-        for (let i = 0; i < n; i++) {
-          const bx = Math.floor(x);
-          const by = Math.floor(y);
-          const bz = Math.floor(z);
-          if (bx >= 0 && bx < 16 && bz >= 0 && bz < 16 && by > 0 && by < WORLD_HEIGHT) {
-            const idx = blockIndex(bx, by, bz);
-            if (blocks[idx] === B.STONE) blocks[idx] = id;
+        const t = tri ? (rand() + rand()) / 2 : rand();
+        const y = minY + t * (maxY - minY);
+        this.vein(blocks, rand, id, size, rand() * 16, y, rand() * 16, size > 20 ? onlyStone : stone);
+      }
+    }
+    // Emeralds: single blocks in mountain stone.
+    if (mountains) {
+      const n = 3 + Math.floor(rand() * 6);
+      for (let i = 0; i < n; i++) {
+        const idx = blockIndex(Math.floor(rand() * 16), 20 + Math.floor(rand() * 90), Math.floor(rand() * 16));
+        if (blocks[idx] === B.STONE) blocks[idx] = B.EMERALD_ORE;
+      }
+    }
+  }
+
+  // ------------------------------------------------------------ structures
+  // A cobblestone room with a monster spawner and loot chests, deep underground.
+  placeDungeon(blocks, meta, cx, cz, heights, tiles) {
+    const rand = mulberry32(hash3(this.seed, cx, 31, cz));
+    if (rand() > 0.12) return;
+    const rx = 1 + Math.floor(rand() * 2); // interior half size 2..3
+    const rz = 1 + Math.floor(rand() * 2) + 1;
+    const ox = 4 + Math.floor(rand() * 6);
+    const oz = 4 + Math.floor(rand() * 6);
+    const hx = rx + 1;
+    const hz = Math.min(rz, 3);
+    const y0 = 12 + Math.floor(rand() * 34);
+    if (y0 + 6 > heights[ox + oz * 16] - 8) return;
+    // Needs mostly solid rock around it.
+    let solid = 0;
+    let total = 0;
+    for (let x = ox - hx - 1; x <= ox + hx + 1; x++) {
+      for (let z = oz - hz - 1; z <= oz + hz + 1; z++) {
+        for (const y of [y0 - 1, y0 + 5]) {
+          total++;
+          if (IS_SOLID[blocks[blockIndex(x, y, z)]] && blocks[blockIndex(x, y, z)] !== B.WATER) solid++;
+        }
+      }
+    }
+    if (solid < total * 0.9) return;
+    const cobble = () => (rand() < 0.35 ? B.MOSSY_COBBLESTONE : B.COBBLESTONE);
+    for (let x = ox - hx - 1; x <= ox + hx + 1; x++) {
+      for (let z = oz - hz - 1; z <= oz + hz + 1; z++) {
+        for (let y = y0 - 1; y <= y0 + 4; y++) {
+          const edge = x === ox - hx - 1 || x === ox + hx + 1 || z === oz - hz - 1 || z === oz + hz + 1;
+          const idx = blockIndex(x, y, z);
+          if (y === y0 - 1) blocks[idx] = cobble();
+          else if (y === y0 + 4) blocks[idx] = B.COBBLESTONE;
+          else if (edge) { if (IS_SOLID[blocks[idx]]) blocks[idx] = B.COBBLESTONE; } else blocks[idx] = B.AIR;
+        }
+      }
+    }
+    const wx = cx * 16;
+    const wz = cz * 16;
+    blocks[blockIndex(ox, y0, oz)] = B.SPAWNER;
+    const mobs = ['zombie', 'zombie', 'skeleton', 'spider'];
+    tiles.push({ x: wx + ox, y: y0, z: wz + oz, type: 'spawner', mob: mobs[Math.floor(rand() * mobs.length)], delay: 200 });
+    // One or two chests against the walls.
+    const chests = 1 + (rand() < 0.5 ? 1 : 0);
+    const spots = [[ox - hx, oz, 1], [ox + hx, oz, 3], [ox, oz - hz, 2], [ox, oz + hz, 0]];
+    for (let i = 0; i < chests; i++) {
+      const [x, z, facing] = spots.splice(Math.floor(rand() * spots.length), 1)[0];
+      blocks[blockIndex(x, y0, z)] = B.CHEST;
+      meta[blockIndex(x, y0, z)] = facing;
+      tiles.push({ x: wx + x, y: y0, z: wz + z, type: 'chest', items: this.dungeonLoot(rand) });
+    }
+  }
+
+  dungeonLoot(rand) {
+    const items = new Array(27).fill(null);
+    // [id, min, max, weight] (a smaller version of Minecraft's dungeon table).
+    const table = [
+      [284, 1, 8, 10], [273, 1, 8, 10], [274, 1, 8, 10], [286, 1, 8, 10], [282, 1, 4, 10], [283, 1, 1, 10],
+      [259, 1, 4, 10], [260, 1, 4, 5], [262, 1, 1, 10], [257, 3, 8, 10], [331, 1, 4, 5], [266, 1, 1, 2],
+      [280, 2, 4, 10], [361, 1, 1, 2], [354, 1, 1, 2], [288, 2, 8, 6],
+    ];
+    const n = 4 + Math.floor(rand() * 5);
+    for (let i = 0; i < n; i++) {
+      const [id, min, max] = pickWeighted(table.map((t) => [t, t[3]]), rand);
+      const slot = Math.floor(rand() * 27);
+      if (!items[slot]) items[slot] = { id, count: min + Math.floor(rand() * (max - min + 1)), damage: 0 };
+    }
+    return items;
+  }
+
+  // Small surface structures that fit inside the chunk: desert wells and mossy boulders.
+  placeFeatures(blocks, meta, heights, biomes, cx, cz) {
+    const rand = mulberry32(hash3(this.seed, cx, 53, cz));
+    const ox = 3 + Math.floor(rand() * 10);
+    const oz = 3 + Math.floor(rand() * 10);
+    const biome = biomes[ox + oz * 16];
+    const h = heights[ox + oz * 16];
+    if (h <= SEA_LEVEL || h + 6 >= H) return;
+    if (biome === BIOMES.DESERT && rand() < 0.02) {
+      // Desert well.
+      for (let dx = -2; dx <= 2; dx++) {
+        for (let dz = -2; dz <= 2; dz++) {
+          for (let y = h - 1; y <= h; y++) blocks[blockIndex(ox + dx, y, oz + dz)] = B.SANDSTONE;
+          for (let y = h + 1; y < h + 6; y++) blocks[blockIndex(ox + dx, y, oz + dz)] = B.AIR;
+        }
+      }
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          if (dx === 0 && dz === 0) continue;
+          blocks[blockIndex(ox + dx, h + 1, oz + dz)] = Math.abs(dx) + Math.abs(dz) === 1 ? B.AIR : B.SANDSTONE;
+          if (Math.abs(dx) === 1 && Math.abs(dz) === 1) {
+            blocks[blockIndex(ox + dx, h + 2, oz + dz)] = B.SANDSTONE;
+            blocks[blockIndex(ox + dx, h + 3, oz + dz)] = B.SANDSTONE;
           }
-          x += rand() * 2 - 1;
-          y += rand() * 2 - 1;
-          z += rand() * 2 - 1;
+          blocks[blockIndex(ox + dx, h + 4, oz + dz)] = B.SANDSTONE_SLAB;
+        }
+      }
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if (Math.abs(dx) + Math.abs(dz) === 1) blocks[blockIndex(ox + dx, h + 1, oz + dz)] = B.SANDSTONE_SLAB;
+      blocks[blockIndex(ox, h + 4, oz)] = B.SANDSTONE;
+      blocks[blockIndex(ox, h, oz)] = B.WATER;
+      blocks[blockIndex(ox, h - 1, oz)] = B.WATER;
+      blocks[blockIndex(ox, h + 1, oz)] = B.WATER;
+      return;
+    }
+    if ((biome === BIOMES.TAIGA || biome === BIOMES.SNOWY_TAIGA) && rand() < 0.25) {
+      // Mossy boulder.
+      const r = 1.2 + rand() * 0.9;
+      for (let dx = -2; dx <= 2; dx++) {
+        for (let dz = -2; dz <= 2; dz++) {
+          for (let dy = -1; dy <= 2; dy++) {
+            if (Math.hypot(dx, dy * 1.2, dz) > r + rand() * 0.5) continue;
+            blocks[blockIndex(ox + dx, h + 1 + dy, oz + dz)] = rand() < 0.7 ? B.MOSSY_COBBLESTONE : B.COBBLESTONE;
+          }
         }
       }
     }
   }
 
-  placePlants(blocks, heights, biomes, cx, cz) {
+  // ------------------------------------------------------------ plants
+  placePlants(blocks, meta, heights, biomes, cx, cz) {
     const seed = this.seed ^ 0x5eed;
     for (let lz = 0; lz < 16; lz++) {
       for (let lx = 0; lx < 16; lx++) {
         const h = heights[lx + lz * 16];
-        if (h + 1 >= WORLD_HEIGHT || h < SEA_LEVEL) continue;
-        const ground = blocks[blockIndex(lx, h, lz)];
-        const aboveIdx = blockIndex(lx, h + 1, lz);
-        if (blocks[aboveIdx] !== B.AIR) continue;
+        if (h + 3 >= H) continue;
         const wx = cx * 16 + lx;
         const wz = cz * 16 + lz;
-        const r = hashFloat(seed, wx, 3, wz);
         const biome = biomes[lx + lz * 16];
-        if (ground === B.GRASS || ground === B.DIRT || ground === B.SAND) {
+        const r = hashFloat(seed, wx, 3, wz);
+        // Lily pads on swamp water.
+        if (biome === BIOMES.SWAMP && h < SEA_LEVEL && blocks[blockIndex(lx, SEA_LEVEL, lz)] === B.WATER && blocks[blockIndex(lx, SEA_LEVEL + 1, lz)] === B.AIR) {
+          if (r < 0.07) blocks[blockIndex(lx, SEA_LEVEL + 1, lz)] = B.LILY_PAD;
+          continue;
+        }
+        if (h < SEA_LEVEL) continue;
+        // Surface may differ from the height map (overhangs): find the top block.
+        let y = Math.min(H - 3, h + 12);
+        while (y > h - 12 && blocks[blockIndex(lx, y, lz)] === B.AIR) y--;
+        const ground = blocks[blockIndex(lx, y, lz)];
+        const aboveIdx = blockIndex(lx, y + 1, lz);
+        if (blocks[aboveIdx] !== B.AIR) continue;
+        if (ground === B.GRASS || ground === B.DIRT || ground === B.SAND || ground === B.PODZOL) {
           // Sugar cane along shores.
-          if (h === SEA_LEVEL && hashFloat(seed, wx, 6, wz) < 0.12 && this.nextToWater(blocks, lx, h, lz, cx, cz)) {
+          if (y === SEA_LEVEL && hashFloat(seed, wx, 6, wz) < 0.12 && this.nextToWater(blocks, lx, y, lz, cx, cz)) {
             const height = 1 + Math.floor(hashFloat(seed, wx, 7, wz) * 3);
-            for (let i = 1; i <= height && h + i < WORLD_HEIGHT; i++) blocks[blockIndex(lx, h + i, lz)] = B.SUGAR_CANE;
+            for (let i = 1; i <= height && y + i < H; i++) blocks[blockIndex(lx, y + i, lz)] = B.SUGAR_CANE;
             continue;
           }
         }
-        if (ground === B.GRASS) {
-          const grassChance = biome === BIOMES.PLAINS ? 0.16 : biome === BIOMES.MOUNTAINS ? 0.04 : 0.07;
-          const flowerChance = biome === BIOMES.PLAINS ? 0.022 : biome === BIOMES.FOREST || biome === BIOMES.BIRCH_FOREST ? 0.01 : 0.004;
+        if (ground === B.GRASS || ground === B.PODZOL) {
+          const grassChance = {
+            [BIOMES.PLAINS]: 0.16, [BIOMES.SAVANNA]: 0.3, [BIOMES.JUNGLE]: 0.25, [BIOMES.MEADOW]: 0.3,
+            [BIOMES.MOUNTAINS]: 0.04, [BIOMES.SWAMP]: 0.08, [BIOMES.DARK_FOREST]: 0.05,
+          }[biome] ?? 0.07;
+          const flowerChance = biome === BIOMES.MEADOW ? 0.08 : biome === BIOMES.PLAINS ? 0.022 : biome === BIOMES.FOREST || biome === BIOMES.BIRCH_FOREST ? 0.01 : 0.004;
           if (r < grassChance) {
-            blocks[aboveIdx] = biome === BIOMES.TAIGA && hashFloat(seed, wx, 8, wz) < 0.6 ? B.FERN : B.TALL_GRASS;
+            const fern = biome === BIOMES.TAIGA || biome === BIOMES.SNOWY_TAIGA ? 0.6 : biome === BIOMES.JUNGLE ? 0.25 : 0;
+            blocks[aboveIdx] = hashFloat(seed, wx, 8, wz) < fern ? B.FERN : B.TALL_GRASS;
           } else if (r < grassChance + flowerChance) {
             // Flowers grow in patches of one kind.
             const patch = hashFloat(seed, Math.floor(wx / 6), 9, Math.floor(wz / 6));
             const set = FLOWERS[biome] || FLOWERS.default;
             blocks[aboveIdx] = set[Math.floor(patch * set.length)];
-          } else if ((biome === BIOMES.TAIGA || biome === BIOMES.FOREST) && r > 0.9975) {
+          } else if ((biome === BIOMES.TAIGA || biome === BIOMES.FOREST || biome === BIOMES.DARK_FOREST || biome === BIOMES.SWAMP) && r > 0.997) {
             blocks[aboveIdx] = hashFloat(seed, wx, 10, wz) < 0.6 ? B.BROWN_MUSHROOM : B.RED_MUSHROOM;
-          } else if (biome === BIOMES.PLAINS && r > 0.9993) {
+          } else if ((biome === BIOMES.PLAINS || biome === BIOMES.SAVANNA) && r > 0.9993) {
             blocks[aboveIdx] = B.PUMPKIN;
           }
         } else if (ground === B.SAND && biome === BIOMES.DESERT) {
           if (r < 0.005) {
             const height = 1 + Math.floor(hashFloat(seed, wx, 5, wz) * 3);
-            for (let i = 1; i <= height && h + i < WORLD_HEIGHT; i++) blocks[blockIndex(lx, h + i, lz)] = B.CACTUS;
+            for (let i = 1; i <= height && y + i < H; i++) blocks[blockIndex(lx, y + i, lz)] = B.CACTUS;
           } else if (r < 0.012) {
+            blocks[aboveIdx] = B.DEAD_BUSH;
+          }
+        } else if (biome === BIOMES.BADLANDS && (ground === B.RED_SAND || ground === B.TERRACOTTA || ground === B.ORANGE_TERRACOTTA)) {
+          if (ground === B.RED_SAND && r < 0.004) {
+            const height = 1 + Math.floor(hashFloat(seed, wx, 5, wz) * 3);
+            for (let i = 1; i <= height && y + i < H; i++) blocks[blockIndex(lx, y + i, lz)] = B.CACTUS;
+          } else if (r < 0.02) {
             blocks[aboveIdx] = B.DEAD_BUSH;
           }
         }
@@ -290,80 +742,98 @@ export class TerrainGenerator {
   }
 
   // A layer of snow on the ground (and on leaves) in cold places.
-  placeSnow(blocks, cx, cz) {
+  placeSnow(blocks, cx, cz, heights, temps) {
     for (let lz = 0; lz < 16; lz++) {
       for (let lx = 0; lx < 16; lx++) {
-        const { h, temp } = this.column(cx * 16 + lx, cz * 16 + lz);
-        if (temp >= -0.35 && h <= 100) continue;
-        let y = WORLD_HEIGHT - 2;
+        if (temps[lx + lz * 16] >= SNOW_TEMP && heights[lx + lz * 16] <= 100) continue;
+        let y = H - 2;
         while (y > 0 && blocks[blockIndex(lx, y, lz)] === B.AIR) y--;
         const top = blocks[blockIndex(lx, y, lz)];
-        if (!IS_SOLID[top] || top === B.ICE || top === B.SNOW) continue;
+        if (!IS_SOLID[top] || top === B.ICE || top === B.SNOW || top === B.LILY_PAD) continue;
         blocks[blockIndex(lx, y + 1, lz)] = B.SNOW;
       }
     }
   }
 
   // Trees can straddle chunk borders, so look at every tree origin within reach of this chunk.
-  placeTrees(blocks, cx, cz) {
+  placeTrees(blocks, meta, cx, cz) {
     const seed = this.seed ^ 0x7ee5;
     const x0 = cx * 16;
     const z0 = cz * 16;
-    const set = (x, y, z, id, overwrite) => {
+    const set = (x, y, z, id, overwrite, m = 0) => {
       const lx = x - x0;
       const lz = z - z0;
-      if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= WORLD_HEIGHT) return;
+      if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= H) return;
       const idx = blockIndex(lx, y, lz);
       const cur = blocks[idx];
-      if (overwrite || cur === B.AIR || cur === B.TALL_GRASS || cur === B.POPPY || cur === B.DANDELION) {
+      if (overwrite || cur === B.AIR || cur === B.TALL_GRASS || cur === B.FERN || cur === B.POPPY || cur === B.DANDELION || cur === B.SNOW) {
         blocks[idx] = id;
+        meta[idx] = m;
       }
     };
-    const R = 3;
+    const R = TREE_RADIUS;
     for (let wz = z0 - R; wz < z0 + 16 + R; wz++) {
       for (let wx = x0 - R; wx < x0 + 16 + R; wx++) {
         const r = hashFloat(seed, wx, 0, wz);
         if (r >= MAX_TREE_DENSITY) continue;
-        const { h, biome } = this.column(wx, wz);
-        if (r >= TREE_DENSITY[biome] || h < SEA_LEVEL || h > WORLD_HEIGHT - 14) continue;
-        if (biome === BIOMES.MOUNTAINS && h > 92) continue;
-        if (this.isCave(wx, h, wz, h, false)) continue;
+        const info = this.column(wx, wz);
+        const { biome } = info;
+        if (r >= TREE_DENSITY[biome]) continue;
+        const h = this.surfaceHeight(wx, wz, info);
+        if (h < SEA_LEVEL || h > H - 32) continue;
+        // Trees need soil: no trees on steep stone or sand.
+        const slope = Math.abs(this.column(wx + 1, wz).h - info.h) + Math.abs(this.column(wx, wz + 1).h - info.h);
+        if (slope > 4 || biome === BIOMES.SNOWY_PEAKS || biome === BIOMES.STONY_PEAKS) continue;
+        if (this.isCaveSurface(wx, h, wz)) continue;
         // Keep trees apart: skip if a neighbouring column also rolled a tree with a lower hash.
         let crowded = false;
-        for (let dz = -1; dz <= 1 && !crowded; dz++) {
-          for (let dx = -1; dx <= 1; dx++) {
+        const gap = biome === BIOMES.JUNGLE || biome === BIOMES.DARK_FOREST ? 1 : 1;
+        for (let dz = -gap; dz <= gap && !crowded; dz++) {
+          for (let dx = -gap; dx <= gap; dx++) {
             if ((dx || dz) && hashFloat(seed, wx + dx, 0, wz + dz) < r) { crowded = true; break; }
           }
         }
         if (crowded) continue;
-        const t = hashFloat(seed, wx, 1, wz);
-        let type = 'oak';
-        if (biome === BIOMES.TAIGA || biome === BIOMES.SNOWY) type = 'spruce';
-        else if (biome === BIOMES.BIRCH_FOREST) type = t < 0.8 ? 'birch' : 'oak';
-        else if (biome === BIOMES.FOREST) type = t < 0.2 ? 'birch' : 'oak';
-        else if (biome === BIOMES.MOUNTAINS) type = t < 0.5 ? 'spruce' : 'oak';
+        const type = pickWeighted(TREES[biome], hashFloat(seed, wx, 1, wz));
         const rand = mulberry32(hash3(seed, wx, 2, wz));
         placeTree(set, type, wx, h + 1, wz, rand);
         set(wx, h, wz, B.DIRT, true);
+        if (type === 'dark_oak' || type === 'mega_jungle') {
+          set(wx + 1, h, wz, B.DIRT, true);
+          set(wx, h, wz + 1, B.DIRT, true);
+          set(wx + 1, h, wz + 1, B.DIRT, true);
+        }
       }
     }
   }
 
+  // Ground height used for features (the height map; overhang tops are ignored).
+  surfaceHeight(x, z, info = this.column(x, z)) {
+    return info.h;
+  }
+
+  // Would a cave or ravine open right at this surface block? (Trees skip those spots.)
+  isCaveSurface(x, y, z) {
+    const a = this.cave1.noise3(x / 55, y / 32, z / 55);
+    const b = this.cave2.noise3(x / 55, y / 32, z / 55);
+    return a * a + b * b < 0.004;
+  }
+
   // Finds a dry land spawn point near the origin.
   findSpawn() {
-    for (let r = 0; r < 4000; r += 8) {
+    const bad = new Set([...WATER_BIOMES, BIOMES.STONY_PEAKS, BIOMES.SNOWY_PEAKS, BIOMES.MOUNTAINS, BIOMES.SWAMP]);
+    for (let r = 0; r < 6000; r += 8) {
       const steps = Math.max(1, Math.floor((r * 2 * Math.PI) / 16));
       for (let i = 0; i < steps; i++) {
         const a = (i / steps) * Math.PI * 2;
         const x = Math.round(Math.cos(a) * r);
         const z = Math.round(Math.sin(a) * r);
         const { h, biome } = this.column(x, z);
-        if (h > SEA_LEVEL && biome !== BIOMES.OCEAN && biome !== BIOMES.RIVER && biome !== BIOMES.MOUNTAINS
-          && !this.isCave(x, h, z, h, false)) {
+        if (h > SEA_LEVEL && !bad.has(biome) && !this.isCaveSurface(x, h, z)) {
           return { x: x + 0.5, y: h + 1, z: z + 0.5 };
         }
       }
     }
-    return { x: 0.5, y: WORLD_HEIGHT - 20, z: 0.5 };
+    return { x: 0.5, y: H - 20, z: 0.5 };
   }
 }

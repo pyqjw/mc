@@ -77,3 +77,31 @@ test('spawn point is on dry land', () => {
   const s = g.findSpawn();
   assert.ok(s.y > SEA_LEVEL && s.y < WORLD_HEIGHT);
 });
+
+test('the world has many different biomes', () => {
+  const g = new TerrainGenerator(11);
+  const seen = new Set();
+  for (let x = -5000; x < 5000; x += 97) for (let z = -5000; z < 5000; z += 97) seen.add(g.column(x, z).biome);
+  assert.ok(seen.size >= 18, `only ${seen.size} biomes found`);
+});
+
+test('dungeons contain a spawner and loot chests', () => {
+  const g = new TerrainGenerator(7);
+  let spawners = 0;
+  for (let cx = -8; cx < 8 && spawners === 0; cx++) {
+    for (let cz = -8; cz < 8; cz++) {
+      const { blocks, tiles } = g.generateChunk(cx, cz);
+      for (const t of tiles) {
+        const id = blocks[blockIndex(t.x - cx * 16, t.y, t.z - cz * 16)];
+        if (t.type === 'spawner') {
+          spawners++;
+          assert.equal(id, B.SPAWNER);
+        } else {
+          assert.equal(id, B.CHEST);
+          assert.ok(t.items.some((s) => s));
+        }
+      }
+    }
+  }
+  assert.ok(spawners > 0, 'expected a dungeon');
+});

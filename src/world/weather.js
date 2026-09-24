@@ -1,5 +1,6 @@
 // Weather cycle like Minecraft: rain and thunder toggle on their own random timers and fade in and
 // out; snow instead of rain in cold places.
+import { SNOW_TEMP } from './generator.js';
 
 const rand = Math.random;
 
@@ -57,5 +58,5 @@ export class Weather {
 // Is it cold enough to snow at this column/height? (Minecraft: biome temperature below 0.15.)
 export function snowsAt(generator, x, z, y) {
   const c = generator.column(x, z);
-  return c.temp < -0.35 || y > 100;
+  return c.temp < SNOW_TEMP || y > 100;
 }

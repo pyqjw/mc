@@ -9,7 +9,7 @@ import { BLOCKS, TILE_INDEX, TEX_TOP, TEX_BOTTOM, TEX_SIDE, TEX_FRONT } from './
 export const DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 const px = (v) => v / 16;
 
-export const SHAPE_ID = { slab: 1, stairs: 2, door: 3, ladder: 4, fence: 5, gate: 6, pane: 7, bed: 8, chest: 9, snow: 10 };
+export const SHAPE_ID = { slab: 1, stairs: 2, door: 3, ladder: 4, fence: 5, gate: 6, pane: 7, bed: 8, chest: 9, snow: 10, vine: 11, lilypad: 12 };
 export const SHAPE_OF = new Uint8Array(256);
 const CONNECT = new Uint8Array(256); // fences / panes connect to these (bit 1 fence, bit 2 pane)
 for (const b of BLOCKS) {
@@ -103,7 +103,8 @@ export function doorBox(meta) {
 
 // ------------------------------------------------------------ ladders
 // meta: the direction the ladder faces (away from its wall).
-export function ladderBox(meta) {
+export function ladderBox(meta, t = DT) {
+  const DT = t;
   switch (meta & 3) {
     case 0: return [0, 0, 1 - DT, 1, 1, 1];
     case 1: return [0, 0, 0, DT, 1, 1];
@@ -196,6 +197,8 @@ export function shapeBoxes(id, meta, kind, nb = null) {
     case SHAPE_ID.stairs: return kind === 'select' ? [[0, 0, 0, 1, 1, 1]] : stairBoxes(meta, nb);
     case SHAPE_ID.door: return [doorBox(meta)];
     case SHAPE_ID.ladder: return [ladderBox(meta)];
+    case SHAPE_ID.vine: return kind === 'collision' ? [] : [ladderBox(meta, 1 / 16)];
+    case SHAPE_ID.lilypad: return [[0, 0, 0, 1, kind === 'collision' ? 1.5 / 16 : 1 / 64, 1]];
     case SHAPE_ID.fence: return fenceBoxes(nb, kind);
     case SHAPE_ID.gate: return gateBoxes(meta, kind);
     case SHAPE_ID.pane: return paneBoxes(nb);

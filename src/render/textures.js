@@ -717,6 +717,67 @@ const PAINTERS = {
     }
   },
   glass_pane_top: (p) => p.fill((x) => (x === 7 || x === 8 ? [215, 235, 240] : [0, 0, 0, 0])),
+
+  acacia_log: (p) => { logSide(p, [104, 98, 88], 0.82); for (let i = 0; i < 10; i++) p.px(Math.floor(p.rand() * 16), Math.floor(p.rand() * 16), [80, 74, 66]); },
+  acacia_log_top: (p) => logTop(p, [186, 96, 52], [104, 98, 88]),
+  acacia_leaves: (p) => tintedLeaves(p),
+  acacia_planks: (p) => planks(p, [170, 92, 50]),
+  acacia_sapling: (p) => sapling(p, [120, 150, 40], [104, 98, 88], false),
+  jungle_log: (p) => { logSide(p, [88, 66, 34], 0.78); for (let y = 0; y < 16; y += 4) p.line(0, y, 15, y + 1, [70, 52, 26]); },
+  jungle_log_top: (p) => logTop(p, [168, 122, 80], [88, 66, 34]),
+  jungle_leaves: (p) => { tintedLeaves(p); for (let i = 0; i < 6; i++) p.px(Math.floor(p.rand() * 16), Math.floor(p.rand() * 16), gray(225)); },
+  jungle_planks: (p) => planks(p, [160, 115, 80]),
+  jungle_sapling: (p) => sapling(p, [50, 140, 30], [88, 66, 34], false),
+  dark_oak_log: (p) => logSide(p, [62, 46, 26], 0.8),
+  dark_oak_log_top: (p) => logTop(p, [88, 64, 36], [62, 46, 26]),
+  dark_oak_leaves: (p) => tintedLeaves(p),
+  dark_oak_planks: (p) => planks(p, [70, 46, 22]),
+  dark_oak_sapling: (p) => sapling(p, [40, 100, 30], [62, 46, 26], false),
+  vine: (p) => {
+    p.fill(() => [0, 0, 0, 0]);
+    for (let i = 0; i < 7; i++) {
+      let x = Math.floor(p.rand() * 16);
+      const len = 6 + Math.floor(p.rand() * 10);
+      for (let y = 0; y < len; y++) {
+        p.px(x, y, gray(130 + p.rand() * 70));
+        if (p.rand() < 0.35) p.px(x + 1, y, gray(160 + p.rand() * 60));
+        if (p.rand() < 0.2) x += p.rand() < 0.5 ? -1 : 1;
+      }
+    }
+  },
+  lily_pad: (p) => {
+    p.fill(() => [0, 0, 0, 0]);
+    for (let y = 1; y < 15; y++) for (let x = 1; x < 15; x++) {
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      if (d > 6.8 || (x > 7 && Math.abs(y - 7.5) < (x - 7) * 0.25)) continue;
+      p.px(x, y, d > 6 ? [22, 86, 30] : shade([32, 112, 42], (p.rand() - 0.5) * 16));
+    }
+  },
+  red_sand: (p) => p.noise([190, 102, 33], 18),
+  terracotta: (p) => p.noise([152, 94, 67], 10),
+  orange_terracotta: (p) => p.noise([162, 84, 38], 10),
+  yellow_terracotta: (p) => p.noise([186, 133, 35], 10),
+  brown_terracotta: (p) => p.noise([77, 51, 36], 8),
+  red_terracotta: (p) => p.noise([143, 61, 47], 10),
+  white_terracotta: (p) => p.noise([210, 178, 161], 10),
+  light_gray_terracotta: (p) => p.noise([135, 107, 98], 10),
+  granite: (p) => p.fill(() => { const r = p.rand(); return r < 0.25 ? [120, 78, 62] : r < 0.4 ? [170, 118, 96] : shade([149, 103, 85], (p.rand() - 0.5) * 16); }),
+  diorite: (p) => p.fill(() => { const r = p.rand(); return r < 0.25 ? [126, 126, 128] : r < 0.4 ? [230, 230, 230] : shade([188, 188, 190], (p.rand() - 0.5) * 16); }),
+  andesite: (p) => p.fill(() => { const r = p.rand(); return r < 0.2 ? [110, 110, 112] : r < 0.35 ? [150, 150, 152] : shade([136, 136, 137], (p.rand() - 0.5) * 12); }),
+  lapis_ore: (p) => ore(p, [30, 70, 180]),
+  redstone_ore: (p) => ore(p, [200, 20, 20]),
+  emerald_ore: (p) => ore(p, [30, 200, 90]),
+  spawner: (p) => p.fill((x, y) => {
+    if (x % 5 === 0 || y % 5 === 0 || x === 15 || y === 15) return shade([34, 44, 56], (p.rand() - 0.5) * 16);
+    return [0, 0, 0, 0];
+  }),
+  coarse_dirt: (p) => p.fill(() => { const r = p.rand(); return r < 0.25 ? [100, 72, 50] : r < 0.4 ? [120, 120, 120] : shade(C.dirt, (p.rand() - 0.5) * 18); }),
+  podzol_top: (p) => p.fill(() => { const r = p.rand(); return r < 0.3 ? [74, 50, 22] : r < 0.5 ? [122, 88, 40] : shade([98, 68, 30], (p.rand() - 0.5) * 16); }),
+  podzol_side: (p) => {
+    dirt(p);
+    const depth = Array.from({ length: T }, () => 2 + Math.floor(p.rand() * 2));
+    p.fill((x, y) => (y < depth[x] ? shade([98, 68, 30], (p.rand() - 0.5) * 16) : null));
+  },
   wheat_0: (p) => wheat(p, 0),
   wheat_1: (p) => wheat(p, 1),
   wheat_2: (p) => wheat(p, 2),
@@ -1089,6 +1150,15 @@ export function getBowCanvas(pull) {
 }
 
 const ITEM_PAINTERS = {
+  lapis_lazuli: (p, r) => { for (let i = 0; i < 5; i++) blob(p, 4 + r() * 8, 4 + r() * 8, 2 + r() * 1.5, [40, 80, 200], r); },
+  redstone: (p, r) => { for (let i = 0; i < 40; i++) { const a = r() * Math.PI * 2; const d = Math.sqrt(r()) * 5; p.px(Math.round(7.5 + Math.cos(a) * d), Math.round(9 + Math.sin(a) * d * 0.7), mul([200, 20, 20], 0.6 + r() * 0.6)); } },
+  emerald: (p) => {
+    const c = [40, 200, 100];
+    for (let y = 2; y < 14; y++) {
+      const w = y < 5 ? y - 1 : y > 10 ? 14 - y : 4;
+      for (let x = 8 - w; x < 8 + w; x++) p.px(x, y, mul(c, x < 7 ? 1.2 : 0.85));
+    }
+  },
   stick: (p) => handle(p, 4, 12, 11, 5),
   coal: (p, r) => blob(p, 7.5, 8, 5, [40, 40, 40], r),
   charcoal: (p, r) => blob(p, 7.5, 8, 5, [55, 45, 35], r),
