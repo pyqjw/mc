@@ -4,9 +4,9 @@
 // and ravines; features include ore veins, stone blobs, trees per biome, dungeons and wells.
 // Any chunk can be generated on its own from the seed.
 import { CHUNK_SIZE, WORLD_HEIGHT, SEA_LEVEL, CHUNK_VOLUME, blockIndex } from '../constants.js';
-import { B, IS_SOLID } from './blocks.js';
+import { B, BLOCKS, IS_SOLID, IS_LOG } from './blocks.js';
 import { SimplexNoise, mulberry32, hash3, hashFloat } from './noise.js';
-import { placeTree, TREE_RADIUS } from './trees.js';
+import { buildTree, TREE_RADIUS } from './trees.js';
 
 const H = WORLD_HEIGHT;
 
@@ -66,7 +66,6 @@ trees(BIOMES.SAVANNA, 0.006, [['acacia', 5], ['oak', 1]]);
 trees(BIOMES.JUNGLE, 0.09, [['jungle', 4], ['jungle_bush', 5], ['mega_jungle', 1], ['fancy_oak', 1]]);
 trees(BIOMES.SWAMP, 0.012, [['swamp_oak', 1]]);
 trees(BIOMES.MEADOW, 0.0006, [['birch', 1], ['oak', 1]]);
-trees(BIOMES.BADLANDS, 0.0004, [['oak', 1]]);
 let MAX_TREE_DENSITY = 0;
 for (const d of TREE_DENSITY) MAX_TREE_DENSITY = Math.max(MAX_TREE_DENSITY, d);
 
@@ -162,15 +161,30 @@ class Grid3 {
     const i101 = i001 + 1;
     const i011 = i010 + GX;
     const i111 = i011 + 1;
-    const a = v[i000] + (v[i100] - v[i000]) * tx;
-    const b = v[i001] + (v[i101] - v[i001]) * tx;
-    const c = v[i010] + (v[i110] - v[i010]) * tx;
-    const d = v[i011] + (v[i111] - v[i011]) * tx;
-    const e = a + (b - a) * tz;
-    const f = c + (d - c) * tz;
-    return e + (f - e) * ty;
+    return trilerp(v[i000], v[i100], v[i001], v[i101], v[i010], v[i110], v[i011], v[i111], tx, ty, tz);
   }
 }
+
+function trilerp(v000, v100, v001, v101, v010, v110, v011, v111, tx, ty, tz) {
+  const a = v000 + (v100 - v000) * tx;
+  const b = v001 + (v101 - v001) * tx;
+  const c = v010 + (v110 - v010) * tx;
+  const d = v011 + (v111 - v011) * tx;
+  const e = a + (b - a) * tz;
+  const f = c + (d - c) * tz;
+  return e + (f - e) * ty;
+}
+
+const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+// Block-meta facings: north, east, south, west.
+const FACING = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+const LAVA_LEVEL = 10;
+// Cave fluid of a column, as a code: LAVA_LEVEL for lava, WATER_CODE + level for aquifer water.
+const WATER_CODE = 1000;
+const fluidTop = (code) => code % WATER_CODE;
+const GRAVITY_FIX = { [B.SAND]: B.SANDSTONE, [B.RED_SAND]: B.TERRACOTTA, [B.GRAVEL]: B.STONE };
+const GRASSY = new Set([B.GRASS, B.SNOWY_GRASS, B.PODZOL, B.COARSE_DIRT]);
+const SOIL_TOPS = new Set([B.GRASS, B.SNOWY_GRASS, B.PODZOL, B.COARSE_DIRT, B.DIRT]);
 
 export class TerrainGenerator {
   constructor(seed) {
@@ -194,10 +208,32 @@ export class TerrainGenerator {
     this.surface = new SimplexNoise(rand);
     this.pillars = new SimplexNoise(rand);
     this.grids = [new Grid3(), new Grid3(), new Grid3(), new Grid3()];
+    this.columns = new Map();
+    this.trees = new Map();
+    this.treeParts = new Map();
+    // Cave noises, sampled on the coarse grid.
+    this.caveFns = [
+      (x, y, z) => this.cave1.noise3(x / 55, y / 32, z / 55),
+      (x, y, z) => this.cave2.noise3(x / 55, y / 32, z / 55),
+      (x, y, z) => this.cave3.noise3(x / 75, y / 36, z / 75) - 0.35 * this.pillars.noise3(x / 14, y / 30, z / 14),
+    ];
+  }
+
+  // Climate, height and biome of a world column (cached: neighbouring chunks ask for the same
+  // columns). Callers must not modify the result.
+  column(x, z) {
+    const key = x + ',' + z;
+    let c = this.columns.get(key);
+    if (c === undefined) {
+      if (this.columns.size > 60000) this.columns.clear();
+      c = this.computeColumn(x, z);
+      this.columns.set(key, c);
+    }
+    return c;
   }
 
   // Climate, height and biome of a world column. Pure function of (x, z).
-  column(x, z) {
+  computeColumn(x, z) {
     const c = this.continental.fbm2(x / 900, z / 900, 5) * 1.35 + 0.08;
     const e = this.erosion.fbm2(x / 650 + 30, z / 650 - 20, 4) * 1.6;
     const w = this.weird.fbm2(x / 400 - 70, z / 400 + 40, 4) * 1.6;
@@ -217,9 +253,13 @@ export class TerrainGenerator {
       h += m * (r * r * 48 + 8) * (0.65 + 0.35 * Math.max(0, pv));
     }
 
-    // Rivers carve valleys through the land.
+    // Rivers run through wide, gentle valleys and carve a channel in the middle.
     const rv = Math.abs(this.river.fbm2(x / 850, z / 850, 3));
     let river = 0;
+    if (land > 0.4 && rv < 0.14 && h > SEA_LEVEL + 2) {
+      const valley = smoothstep(0.14, 0.045, rv) * 0.7 * (1 - m * 0.7) * smoothstep(0.4, 0.6, land);
+      h -= (h - (SEA_LEVEL + 2)) * valley;
+    }
     if (land > 0.4 && rv < 0.045) {
       river = 1 - rv / 0.045;
       const t = smoothstep(0, 0.6, river) * (1 - m * 0.7);
@@ -268,9 +308,13 @@ export class TerrainGenerator {
       biome = BIOMES.JUNGLE;
     }
 
-    // Swamps sit right at the water line.
-    if (biome === BIOMES.SWAMP) {
-      h = lerp(h, SEA_LEVEL + this.surface.noise2(x / 12, z / 12) * 1.6, 0.85);
+    // Swamps sit right at the water line. The pull fades out towards the swamp's edges so there
+    // is no step at its border.
+    const swamp = smoothstep(0.15, 0.25, hum) * smoothstep(-0.1, 0, e) * smoothstep(-0.15, -0.05, temp) * (1 - smoothstep(0.15, 0.25, temp))
+      * (1 - smoothstep(SEA_LEVEL + 4, SEA_LEVEL + 8, hRaw)) * (1 - river) * (1 - m);
+    if (swamp > 0) {
+      h = lerp(h, SEA_LEVEL + this.surface.noise2(x / 12, z / 12) * 1.6, 0.85 * swamp);
+      if (WATER_BIOMES.has(biome)) h = Math.min(h, SEA_LEVEL - 2);
     }
     // Badlands rise in flat-topped terraces, fading out towards neighbouring biomes.
     if (temp > 0.37 && hum < 0 && w > 0 && biome !== BIOMES.RIVER) {
@@ -307,9 +351,12 @@ export class TerrainGenerator {
 
     // 3D noise grids: two tunnel noises, caverns and mountain overhangs.
     const [g1, g2, g3, g4] = this.grids;
-    g1.fill(x0, z0, (x, y, z) => this.cave1.noise3(x / 55, y / 32, z / 55));
-    g2.fill(x0, z0, (x, y, z) => this.cave2.noise3(x / 55, y / 32, z / 55));
-    g3.fill(x0, z0, (x, y, z) => this.cave3.noise3(x / 75, y / 36, z / 75) - 0.35 * this.pillars.noise3(x / 14, y / 30, z / 14));
+    g1.fill(x0, z0, this.caveFns[0]);
+    g2.fill(x0, z0, this.caveFns[1]);
+    g3.fill(x0, z0, this.caveFns[2]);
+    const fluids = new Int16Array(18 * 18);
+    for (let z = -1; z <= 16; z++) for (let x = -1; x <= 16; x++) fluids[(x + 1) + (z + 1) * 18] = this.caveFluid(x0 + x, z0 + z);
+    const fluid = (lx, lz) => fluids[(lx + 1) + (lz + 1) * 18];
     g4.fill(x0, z0, (x, y, z) => this.overhang.fbm3(x / 26, y / 18, z / 26, 2));
 
     for (let lz = 0; lz < 16; lz++) {
@@ -328,13 +375,13 @@ export class TerrainGenerator {
         const cold = temp < SNOW_TEMP;
 
         // Solid terrain: the height map, bent into cliffs and overhangs in the mountains.
-        const amp = m > 0.25 ? (m - 0.25) * 20 : 0;
-        const yTop = Math.min(H - 2, h + Math.ceil(amp));
-        const solidAt = (y) => {
-          if (y <= h - amp) return true;
-          if (amp === 0) return y <= h;
-          return (h - y) + g4.at(lx, y, lz) * amp * 1.4 > 0;
-        };
+        // Jagged rock in the mountains: 3D noise lets rock rise above the height map, but only
+        // on top of rock, so nothing is left hanging.
+        const amp = m > 0.25 ? (m - 0.25) * 16 : 0;
+        let top = h;
+        while (amp > 0 && top < H - 2 && (h - top - 1) + g4.at(lx, top + 1, lz) * amp * 1.4 > 0) top++;
+        const yTop = top;
+        const solidAt = (y) => y <= top;
 
         // Surface materials.
         const surf = this.surfaceFor(info, slope, wx, wz);
@@ -351,21 +398,32 @@ export class TerrainGenerator {
           if (y <= bedrockTop && (y === 0 || hashFloat(seed, wx, y, wz) < 0.6)) id = B.BEDROCK;
           else if (biome === BIOMES.BADLANDS && depth < 18 && y > 50) {
             id = depth === 0 && y < 90 ? B.RED_SAND : depth < 2 && y < 90 ? B.RED_SAND : BANDS[(y + Math.floor(this.surface.noise2(wx / 60, wz / 60) * 3) + 32) % BANDS.length];
-          } else if (depth === 0) id = y < SEA_LEVEL - 1 && surf.top === B.GRASS ? surf.under : y >= SEA_LEVEL - 1 || !surf.wet ? surf.top : surf.wet;
+          } else if (depth === 0) {
+            // Under the sea there is no grass.
+            const wet = h < SEA_LEVEL && y < SEA_LEVEL;
+            id = wet ? surf.wet || (GRASSY.has(surf.top) ? surf.under : surf.top) : surf.top;
+          }
           else if (depth < surf.depth) id = surf.filler;
           else if (surf.stoneLayer && depth < surf.depth + 4) id = surf.stoneLayer;
           else id = B.STONE;
           blocks[idx] = id;
         }
         // Water up to sea level; frozen at the top in cold places.
-        for (let y = SEA_LEVEL; y > 0; y--) {
+        for (let y = SEA_LEVEL; y > 0 && h < SEA_LEVEL; y--) {
           const idx = blockIndex(lx, y, lz);
           if (blocks[idx] !== B.AIR) break;
           blocks[idx] = y === SEA_LEVEL && cold ? B.ICE : B.WATER;
         }
 
         // Caves (after the surface, so cave floors stay stone).
-        this.carveColumn(blocks, lx, lz, wx, wz, info, g1, g2, g3);
+        const ctx = this.caveContext(info, wx, wz, fluid(lx, lz), SIDES.map(([dx, dz]) => [col(lx + dx, lz + dz).h, fluid(lx + dx, lz + dz)]));
+        for (let y = 5; y <= ctx.top; y++) {
+          const idx = blockIndex(lx, y, lz);
+          const id = blocks[idx];
+          if (id === B.AIR || id === B.WATER || id === B.BEDROCK || id === B.ICE) continue;
+          const fill = this.caveFill(ctx, y, g1.at(lx, y, lz), g2.at(lx, y, lz), y < 56 ? g3.at(lx, y, lz) : 0);
+          if (fill >= 0) blocks[idx] = fill;
+        }
       }
     }
 
@@ -373,8 +431,11 @@ export class TerrainGenerator {
     this.placeOres(blocks, cx, cz, rand, biomes);
     this.placeDungeon(blocks, meta, cx, cz, heights, tiles);
     this.placeFeatures(blocks, meta, heights, biomes, cx, cz);
+    this.dropFloating(blocks, heights, fluid, col);
+    this.settleGravity(blocks);
     this.placePlants(blocks, meta, heights, biomes, cx, cz);
     this.placeTrees(blocks, meta, cx, cz);
+    this.tidyTrees(blocks, meta);
     this.placeSnow(blocks, cx, cz, heights, temps);
     return { blocks, meta, heights, biomes, tiles };
   }
@@ -435,41 +496,75 @@ export class TerrainGenerator {
     return s;
   }
 
-  // Carves caves into one column: tunnels, caverns with pillars, flooded aquifers and ravines.
-  carveColumn(blocks, lx, lz, wx, wz, info, g1, g2, g3) {
+  // Cave fluid of a column: lava up to y 10, or in aquifer regions water up to a level that is the
+  // same over large areas, so that neighbouring pools line up.
+  caveFluid(wx, wz) {
+    if (this.aquifer.noise2(wx / 160, wz / 160) <= 0.15) return LAVA_LEVEL;
+    const step = Math.min(3, Math.floor((this.aquifer.noise2(wx / 120 + 7, wz / 120) + 1) * 2));
+    return WATER_CODE + 16 + step * 8;
+  }
+
+  // Per-column cave settings. `sides` holds [height, fluid] of the four neighbouring columns.
+  caveContext(info, wx, wz, fluid, sides) {
     const { h, biome } = info;
     const underwater = h < SEA_LEVEL || WATER_BIOMES.has(biome) || biome === BIOMES.SWAMP;
-    const top = underwater ? h - 7 : h;
-    // Ravines: long narrow cracks in some regions.
-    const rv = Math.abs(this.ravine.noise2(wx / 180, wz / 180));
+    // Never open a cave beside the sea or a river: the water would pour in.
+    let shoreLo = Infinity;
+    for (const [nh] of sides) if (nh < SEA_LEVEL) shoreLo = Math.min(shoreLo, nh - 6);
     const ravineRegion = this.ravine.noise2(wx / 700 + 91, wz / 700 - 13) > 0.45;
-    const ravineW = ravineRegion ? 0.028 : 0;
-    const ravineBottom = 18 + Math.floor(this.ravine.noise2(wx / 40, wz / 40) * 6);
-    const aquiferOn = this.aquifer.noise2(wx / 160, wz / 160) > 0.15;
-    const aquiferLevel = 16 + Math.floor((this.aquifer.noise2(wx / 90 + 7, wz / 90) + 1) * 8);
-    const thick = 0.004 + 0.008 * (this.caveThick.noise2(wx / 200, wz / 200) + 1) * 0.5;
-    for (let y = 5; y <= top; y++) {
-      const idx = blockIndex(lx, y, lz);
-      const id = blocks[idx];
-      if (id === B.AIR || id === B.WATER || id === B.BEDROCK || id === B.ICE) continue;
-      let carve = false;
-      const a = g1.at(lx, y, lz);
-      const b = g2.at(lx, y, lz);
-      if (a * a + b * b < thick) carve = true;
-      else if (y < 56) {
-        const cheese = g3.at(lx, y, lz);
-        if (cheese > 0.58 - (56 - y) * 0.004) carve = true;
-      }
-      if (!carve && ravineW > 0 && y >= ravineBottom) {
-        const mid = (ravineBottom + h) / 2;
-        const width = ravineW * (1 - Math.abs(y - mid) / Math.max(1, h - ravineBottom) * 0.9);
-        if (rv < width && !underwater) carve = true;
-      }
-      if (!carve) continue;
-      if (y <= 10) blocks[idx] = B.LAVA;
-      else if (aquiferOn && y <= aquiferLevel && y < h - 8) blocks[idx] = B.WATER;
-      else blocks[idx] = B.AIR;
+    return {
+      h,
+      top: underwater ? h - 7 : h,
+      underwater,
+      shoreLo,
+      fluid,
+      level: fluidTop(fluid),
+      sides,
+      rv: Math.abs(this.ravine.noise2(wx / 180, wz / 180)),
+      ravineW: ravineRegion ? 0.028 : 0,
+      ravineBottom: 18 + Math.floor(this.ravine.noise2(wx / 40, wz / 40) * 6),
+      thick: 0.004 + 0.008 * (this.caveThick.noise2(wx / 200, wz / 200) + 1) * 0.5,
+    };
+  }
+
+  // What a cave leaves at height y of a column (-1: rock stays): tunnels, caverns with pillars and
+  // ravines; below the column's fluid level it fills with lava or aquifer water. Where two
+  // different fluids (or a fluid and the open surface) would meet, the rock stays as a wall.
+  caveFill(ctx, y, a, b, cheese) {
+    let carve = a * a + b * b < ctx.thick;
+    if (!carve && y < 56 && cheese > 0.58 - (56 - y) * 0.004) carve = true;
+    if (!carve && ctx.ravineW > 0 && y >= ctx.ravineBottom && !ctx.underwater) {
+      const mid = (ctx.ravineBottom + ctx.h) / 2;
+      const width = ctx.ravineW * (1 - Math.abs(y - mid) / Math.max(1, ctx.h - ctx.ravineBottom) * 0.9);
+      if (ctx.rv < width) carve = true;
     }
+    if (!carve) return -1;
+    if (y >= ctx.shoreLo && y <= SEA_LEVEL) return -1;
+    for (const [nh, nf] of ctx.sides) {
+      if (nf !== ctx.fluid && y <= Math.max(ctx.level, fluidTop(nf))) return -1;
+      if (y <= ctx.level && nh < y) return -1;
+    }
+    if (y > ctx.level) return B.AIR;
+    return ctx.fluid === LAVA_LEVEL ? B.LAVA : B.WATER;
+  }
+
+  // Is the block at (x, y, z) hollowed out by a cave? Same result as chunk generation, for use
+  // outside a chunk (tree and spawn placement).
+  caveAt(x, y, z) {
+    const info = this.column(x, z);
+    const sides = SIDES.map(([dx, dz]) => [this.column(x + dx, z + dz).h, this.caveFluid(x + dx, z + dz)]);
+    const ctx = this.caveContext(info, x, z, this.caveFluid(x, z), sides);
+    if (y < 5 || y > ctx.top) return false;
+    const X = Math.floor(x / 4) * 4;
+    const Z = Math.floor(z / 4) * 4;
+    const Y = Math.min(GY - 2, y >> 2) * 4;
+    const tx = (x - X) / 4;
+    const ty = y / 4 - Y / 4;
+    const tz = (z - Z) / 4;
+    const at = (fn) => trilerp(fn(X, Y, Z), fn(X + 4, Y, Z), fn(X, Y, Z + 4), fn(X + 4, Y, Z + 4),
+      fn(X, Y + 4, Z), fn(X + 4, Y + 4, Z), fn(X, Y + 4, Z + 4), fn(X + 4, Y + 4, Z + 4), tx, ty, tz);
+    const [f1, f2, f3] = this.caveFns;
+    return this.caveFill(ctx, y, at(f1), at(f2), y < 56 ? at(f3) : 0) >= 0;
   }
 
   // ------------------------------------------------------------ ores and stone
@@ -573,7 +668,7 @@ export class TerrainGenerator {
           const idx = blockIndex(x, y, z);
           if (y === y0 - 1) blocks[idx] = cobble();
           else if (y === y0 + 4) blocks[idx] = B.COBBLESTONE;
-          else if (edge) { if (IS_SOLID[blocks[idx]]) blocks[idx] = B.COBBLESTONE; } else blocks[idx] = B.AIR;
+          else if (edge) { if (blocks[idx] !== B.AIR) blocks[idx] = B.COBBLESTONE; } else blocks[idx] = B.AIR;
         }
       }
     }
@@ -618,6 +713,15 @@ export class TerrainGenerator {
     const biome = biomes[ox + oz * 16];
     const h = heights[ox + oz * 16];
     if (h <= SEA_LEVEL || h + 6 >= H) return;
+    // Only on flat, solid ground.
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const i = ox + dx + (oz + dz) * 16;
+        if (heights[i] !== h || biomes[i] !== biome) return;
+        for (let y = h - 3; y <= h; y++) if (!IS_SOLID[blocks[blockIndex(ox + dx, y, oz + dz)]]) return;
+        if (blocks[blockIndex(ox + dx, h + 1, oz + dz)] !== B.AIR) return;
+      }
+    }
     if (biome === BIOMES.DESERT && rand() < 0.02) {
       // Desert well.
       for (let dx = -2; dx <= 2; dx++) {
@@ -653,6 +757,142 @@ export class TerrainGenerator {
             if (Math.hypot(dx, dy * 1.2, dz) > r + rand() * 0.5) continue;
             blocks[blockIndex(ox + dx, h + 1 + dy, oz + dz)] = rand() < 0.7 ? B.MOSSY_COBBLESTONE : B.COBBLESTONE;
           }
+        }
+      }
+    }
+  }
+
+  // Removes rock left floating in the air by caves: pieces not connected to the bedrock (or
+  // standing in a lake or lava pool, like an island) go. A piece touching the chunk's side may rest
+  // on the next chunk, so it stays unless it is a small lump (the next chunk then drops its part).
+  dropFloating(blocks, heights, fluid, col) {
+    const seen = new Uint8Array(CHUNK_VOLUME);
+    const solid = (id) => id !== B.AIR && id !== B.WATER && id !== B.LAVA;
+    const flood = (start, onCell) => {
+      const stack = [start];
+      seen[start] = 1;
+      while (stack.length) {
+        const idx = stack.pop();
+        onCell(idx);
+        const lx = idx & 15;
+        const lz = (idx >> 4) & 15;
+        const y = idx >> 8;
+        if (lx > 0) visit(idx - 1);
+        if (lx < 15) visit(idx + 1);
+        if (lz > 0) visit(idx - 16);
+        if (lz < 15) visit(idx + 16);
+        if (y > 0) visit(idx - 256);
+        if (y < H - 1) visit(idx + 256);
+      }
+      function visit(i) {
+        if (seen[i] || !solid(blocks[i])) return;
+        seen[i] = 1;
+        stack.push(i);
+      }
+    };
+    for (let i = 0; i < CHUNK_VOLUME; i++) {
+      if (seen[i] || !solid(blocks[i])) continue;
+      if (i < 256 || blocks[i - 256] === B.WATER || blocks[i - 256] === B.LAVA) flood(i, () => {});
+    }
+    for (let idx = 256; idx < CHUNK_VOLUME; idx++) {
+      if (seen[idx] || !solid(blocks[idx])) continue;
+      const cells = [];
+      let border = false;
+      let wet = false;
+      const fluidAt = (i) => blocks[i] === B.WATER || blocks[i] === B.LAVA;
+      flood(idx, (i) => {
+        cells.push(i);
+        const lx = i & 15;
+        const lz = (i >> 4) & 15;
+        if (lx === 0 || lx === 15 || lz === 0 || lz === 15) border = true;
+        if ((lx > 0 && fluidAt(i - 1)) || (lx < 15 && fluidAt(i + 1)) || (lz > 0 && fluidAt(i - 16)) || (lz < 15 && fluidAt(i + 16))
+          || (i >= 256 && fluidAt(i - 256)) || (i + 256 < CHUNK_VOLUME && fluidAt(i + 256))) wet = true;
+        // Across the chunk's side: the sea, or cave fluid that may be there.
+        const y = i >> 8;
+        for (const [dx, dz] of SIDES) {
+          const nx = lx + dx;
+          const nz = lz + dz;
+          if (nx >= 0 && nx < 16 && nz >= 0 && nz < 16) continue;
+          const nh = col(nx, nz).h;
+          if ((nh < SEA_LEVEL && y > nh && y <= SEA_LEVEL) || y <= fluidTop(fluid(nx, nz))) wet = true;
+        }
+      });
+      // Pieces holding back water or lava stay too.
+      if (border && (cells.length >= 48 || wet)) continue;
+      for (const i of cells) {
+        // Fill the hole with whatever surrounds it: the sea, the cave's fluid, or air.
+        const lx = i & 15;
+        const lz = (i >> 4) & 15;
+        const y = i >> 8;
+        const f = fluid(lx, lz);
+        const h = heights[lx + lz * 16];
+        if (h < SEA_LEVEL && y > h && y <= SEA_LEVEL) blocks[i] = B.WATER;
+        else if (y <= fluidTop(f)) blocks[i] = f === LAVA_LEVEL ? B.LAVA : B.WATER;
+        else blocks[i] = B.AIR;
+      }
+    }
+  }
+
+  // Leaves cut off from their tree by the terrain, and vines hanging from nothing, are removed
+  // (only where the chunk can see it; across its sides the neighbour's blocks are trusted).
+  tidyTrees(blocks, meta) {
+    const leaf = (id) => id > 0 && BLOCKS[id].leaves;
+    const dist = new Uint8Array(CHUNK_VOLUME).fill(255);
+    let frontier = [];
+    for (let idx = 0; idx < CHUNK_VOLUME; idx++) {
+      const id = blocks[idx];
+      const lx = idx & 15;
+      const lz = (idx >> 4) & 15;
+      if (IS_LOG[id] || (leaf(id) && (lx === 0 || lx === 15 || lz === 0 || lz === 15))) {
+        dist[idx] = 0;
+        frontier.push(idx);
+      }
+    }
+    for (let d = 1; d <= 6 && frontier.length; d++) {
+      const next = [];
+      for (const idx of frontier) {
+        const lx = idx & 15;
+        const lz = (idx >> 4) & 15;
+        const y = idx >> 8;
+        const around = [lx > 0 ? idx - 1 : -1, lx < 15 ? idx + 1 : -1, lz > 0 ? idx - 16 : -1, lz < 15 ? idx + 16 : -1,
+          y > 0 ? idx - 256 : -1, y < H - 1 ? idx + 256 : -1];
+        for (const n of around) {
+          if (n < 0 || dist[n] !== 255 || !leaf(blocks[n])) continue;
+          dist[n] = d;
+          next.push(n);
+        }
+      }
+      frontier = next;
+    }
+    for (let idx = 0; idx < CHUNK_VOLUME; idx++) if (dist[idx] === 255 && leaf(blocks[idx])) blocks[idx] = B.AIR;
+    // Vines, top down: each needs its block behind it or a vine above.
+    for (let y = H - 2; y > 0; y--) {
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const idx = blockIndex(lx, y, lz);
+          const up = blocks[idx + 256];
+          if (blocks[idx] !== B.VINE || up === B.VINE || (up > 0 && BLOCKS[up].leaves)) continue;
+          const [dx, dz] = FACING[(meta[idx] + 2) & 3];
+          const bx = lx + dx;
+          const bz = lz + dz;
+          if (bx < 0 || bx > 15 || bz < 0 || bz > 15) continue;
+          if (!IS_SOLID[blocks[blockIndex(bx, y, bz)]]) blocks[idx] = B.AIR;
+        }
+      }
+    }
+  }
+
+  // Sand and gravel left hanging over a cave would fall at the first update: firm them up instead
+  // (sand to sandstone, like Minecraft's beaches and deserts).
+  settleGravity(blocks) {
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        for (let y = 1; y < H; y++) {
+          const idx = blockIndex(lx, y, lz);
+          const fix = GRAVITY_FIX[blocks[idx]];
+          if (fix === undefined) continue;
+          const below = blocks[idx - 256];
+          if (below === B.AIR || below === B.WATER || below === B.LAVA) blocks[idx] = fix;
         }
       }
     }
@@ -710,21 +950,30 @@ export class TerrainGenerator {
           }
         } else if (ground === B.SAND && biome === BIOMES.DESERT) {
           if (r < 0.005) {
-            const height = 1 + Math.floor(hashFloat(seed, wx, 5, wz) * 3);
-            for (let i = 1; i <= height && y + i < H; i++) blocks[blockIndex(lx, y + i, lz)] = B.CACTUS;
+            this.cactus(blocks, lx, y, lz, 1 + Math.floor(hashFloat(seed, wx, 5, wz) * 3));
           } else if (r < 0.012) {
             blocks[aboveIdx] = B.DEAD_BUSH;
           }
         } else if (biome === BIOMES.BADLANDS && (ground === B.RED_SAND || ground === B.TERRACOTTA || ground === B.ORANGE_TERRACOTTA)) {
           if (ground === B.RED_SAND && r < 0.004) {
-            const height = 1 + Math.floor(hashFloat(seed, wx, 5, wz) * 3);
-            for (let i = 1; i <= height && y + i < H; i++) blocks[blockIndex(lx, y + i, lz)] = B.CACTUS;
+            this.cactus(blocks, lx, y, lz, 1 + Math.floor(hashFloat(seed, wx, 5, wz) * 3));
           } else if (r < 0.02) {
             blocks[aboveIdx] = B.DEAD_BUSH;
           }
         }
       }
     }
+  }
+
+  // A cactus needs free space on all four sides (and stays inside the chunk so the neighbours
+  // cannot put anything next to it).
+  cactus(blocks, lx, y, lz, height) {
+    if (lx < 1 || lx > 14 || lz < 1 || lz > 14 || y + height >= H) return;
+    for (let i = 1; i <= height; i++) {
+      if (blocks[blockIndex(lx, y + i, lz)] !== B.AIR) return;
+      for (const [dx, dz] of SIDES) if (blocks[blockIndex(lx + dx, y + i, lz + dz)] !== B.AIR) return;
+    }
+    for (let i = 1; i <= height; i++) blocks[blockIndex(lx, y + i, lz)] = B.CACTUS;
   }
 
   nextToWater(blocks, lx, y, lz, cx, cz) {
@@ -749,8 +998,9 @@ export class TerrainGenerator {
         let y = H - 2;
         while (y > 0 && blocks[blockIndex(lx, y, lz)] === B.AIR) y--;
         const top = blocks[blockIndex(lx, y, lz)];
-        if (!IS_SOLID[top] || top === B.ICE || top === B.SNOW || top === B.LILY_PAD) continue;
+        if (!IS_SOLID[top] || top === B.ICE || top === B.SNOW || top === B.LILY_PAD || top === B.CACTUS) continue;
         blocks[blockIndex(lx, y + 1, lz)] = B.SNOW;
+        if (top === B.GRASS) blocks[blockIndex(lx, y, lz)] = B.SNOWY_GRASS;
       }
     }
   }
@@ -766,37 +1016,38 @@ export class TerrainGenerator {
       if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= H) return;
       const idx = blockIndex(lx, y, lz);
       const cur = blocks[idx];
-      if (overwrite || cur === B.AIR || cur === B.TALL_GRASS || cur === B.FERN || cur === B.POPPY || cur === B.DANDELION || cur === B.SNOW) {
+      const soft = cur === B.AIR || cur === B.TALL_GRASS || cur === B.FERN || cur === B.POPPY || cur === B.DANDELION || cur === B.SNOW;
+      if (overwrite || soft || (cur === B.VINE && id !== B.VINE)) {
         blocks[idx] = id;
         meta[idx] = m;
       }
     };
+    // Where the ground will stop a tree's leaves (the height map, cached for this chunk).
+    const heightCache = new Map();
+    const groundAt = (x, y, z) => {
+      const k = x + ',' + z;
+      let h = heightCache.get(k);
+      if (h === undefined) {
+        h = this.column(x, z).h;
+        heightCache.set(k, h);
+      }
+      return y <= h;
+    };
     const R = TREE_RADIUS;
     for (let wz = z0 - R; wz < z0 + 16 + R; wz++) {
       for (let wx = x0 - R; wx < x0 + 16 + R; wx++) {
-        const r = hashFloat(seed, wx, 0, wz);
-        if (r >= MAX_TREE_DENSITY) continue;
-        const info = this.column(wx, wz);
-        const { biome } = info;
-        if (r >= TREE_DENSITY[biome]) continue;
-        const h = this.surfaceHeight(wx, wz, info);
-        if (h < SEA_LEVEL || h > H - 32) continue;
-        // Trees need soil: no trees on steep stone or sand.
-        const slope = Math.abs(this.column(wx + 1, wz).h - info.h) + Math.abs(this.column(wx, wz + 1).h - info.h);
-        if (slope > 4 || biome === BIOMES.SNOWY_PEAKS || biome === BIOMES.STONY_PEAKS) continue;
-        if (this.isCaveSurface(wx, h, wz)) continue;
-        // Keep trees apart: skip if a neighbouring column also rolled a tree with a lower hash.
-        let crowded = false;
-        const gap = biome === BIOMES.JUNGLE || biome === BIOMES.DARK_FOREST ? 1 : 1;
-        for (let dz = -gap; dz <= gap && !crowded; dz++) {
-          for (let dx = -gap; dx <= gap; dx++) {
-            if ((dx || dz) && hashFloat(seed, wx + dx, 0, wz + dz) < r) { crowded = true; break; }
-          }
+        const tree = this.treeAt(wx, wz);
+        if (!tree) continue;
+        // The finished blocks of each tree are kept for the other chunks it reaches into.
+        const key = wx + ',' + wz;
+        let parts = this.treeParts.get(key);
+        if (!parts) {
+          if (this.treeParts.size > 2000) this.treeParts.clear();
+          parts = buildTree(tree.type, wx, tree.h + 1, wz, mulberry32(hash3(seed, wx, 2, wz)), undefined, groundAt);
+          this.treeParts.set(key, parts);
         }
-        if (crowded) continue;
-        const type = pickWeighted(TREES[biome], hashFloat(seed, wx, 1, wz));
-        const rand = mulberry32(hash3(seed, wx, 2, wz));
-        placeTree(set, type, wx, h + 1, wz, rand);
+        for (const p of parts) set(p[0], p[1], p[2], p[3], p[4], p[5]);
+        const { type, h } = tree;
         set(wx, h, wz, B.DIRT, true);
         if (type === 'dark_oak' || type === 'mega_jungle') {
           set(wx + 1, h, wz, B.DIRT, true);
@@ -807,16 +1058,45 @@ export class TerrainGenerator {
     }
   }
 
-  // Ground height used for features (the height map; overhang tops are ignored).
-  surfaceHeight(x, z, info = this.column(x, z)) {
-    return info.h;
+  // The tree rooted at column (wx, wz), if any: { type, h }. Cached, since up to four chunks
+  // ask about each tree.
+  treeAt(wx, wz) {
+    const key = wx + ',' + wz;
+    if (this.trees.has(key)) return this.trees.get(key);
+    if (this.trees.size > 30000) this.trees.clear();
+    const tree = this.findTree(wx, wz);
+    this.trees.set(key, tree);
+    return tree;
   }
 
-  // Would a cave or ravine open right at this surface block? (Trees skip those spots.)
-  isCaveSurface(x, y, z) {
-    const a = this.cave1.noise3(x / 55, y / 32, z / 55);
-    const b = this.cave2.noise3(x / 55, y / 32, z / 55);
-    return a * a + b * b < 0.004;
+  findTree(wx, wz) {
+    const seed = this.seed ^ 0x7ee5;
+    const r = hashFloat(seed, wx, 0, wz);
+    if (r >= MAX_TREE_DENSITY) return null;
+    // Keep trees apart: skip if a neighbouring column also rolled a tree with a lower hash.
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if ((dx || dz) && hashFloat(seed, wx + dx, 0, wz + dz) < r) return null;
+      }
+    }
+    const info = this.column(wx, wz);
+    const { biome, h } = info;
+    if (r >= TREE_DENSITY[biome]) return null;
+    if (h < SEA_LEVEL || h > H - 32 || info.m > 0.25) return null;
+    // Trees need soil (the column's own surface block, not stone on a slope or sand)…
+    let slope = 0;
+    for (const [dx, dz] of SIDES) slope = Math.max(slope, Math.abs(this.column(wx + dx, wz + dz).h - h));
+    if (!SOIL_TOPS.has(this.surfaceFor(info, slope, wx, wz).top)) return null;
+    // …and solid ground: no trees floating over a cave mouth.
+    if (this.caveAt(wx, h, wz) || this.caveAt(wx, h - 1, wz)) return null;
+    let type = pickWeighted(TREES[biome], hashFloat(seed, wx, 1, wz));
+    if (type === 'dark_oak' || type === 'mega_jungle') {
+      // 2x2 trunks need all four columns level and solid; otherwise grow the small kind.
+      for (const [dx, dz] of [[1, 0], [0, 1], [1, 1]]) {
+        if (this.column(wx + dx, wz + dz).h !== h || this.caveAt(wx + dx, h, wz + dz)) { type = type === 'dark_oak' ? 'oak' : 'jungle'; break; }
+      }
+    }
+    return { type, h };
   }
 
   // Finds a dry land spawn point near the origin.
@@ -829,7 +1109,7 @@ export class TerrainGenerator {
         const x = Math.round(Math.cos(a) * r);
         const z = Math.round(Math.sin(a) * r);
         const { h, biome } = this.column(x, z);
-        if (h > SEA_LEVEL && !bad.has(biome) && !this.isCaveSurface(x, h, z)) {
+        if (h > SEA_LEVEL && !bad.has(biome) && !this.caveAt(x, h, z) && !this.caveAt(x, h - 1, z)) {
           return { x: x + 0.5, y: h + 1, z: z + 0.5 };
         }
       }

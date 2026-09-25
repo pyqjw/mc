@@ -40,6 +40,21 @@ export function treeHeight(type, rand) {
 // Space a tree needs around its trunk (for chunk-border handling).
 export const TREE_RADIUS = 5;
 
+// Logs from (x0, y0, z0) to (x1, y1, z1), stepping one axis at a time so every log touches the
+// previous one by a face.
+function logLine(set, log, x0, y0, z0, x1, y1, z1) {
+  let x = x0;
+  let y = y0;
+  let z = z0;
+  set(x, y, z, log, true);
+  while (x !== x1 || y !== y1 || z !== z1) {
+    if (x !== x1) x += Math.sign(x1 - x);
+    else if (z !== z1) z += Math.sign(z1 - z);
+    else y += Math.sign(y1 - y);
+    set(x, y, z, log, true);
+  }
+}
+
 function blob(set, leaves, cx, cy, cz, r, rand, squash = 1) {
   const R = Math.ceil(r);
   for (let dy = -Math.ceil(r * squash); dy <= Math.ceil(r * squash); dy++) {
@@ -76,8 +91,66 @@ function roundCanopy(set, leaves, x, top, z, rand, wide = false) {
   }
 }
 
-// Places a tree whose trunk base is at (x, y, z).
-export function placeTree(set, type, x, y, z, rand, height = treeHeight(type, rand)) {
+// Leaves further than this (in steps through leaves) from a log would decay, as in the game.
+const LEAF_REACH = 6;
+
+// Places a tree whose trunk base is at (x, y, z). `blocked(x, y, z)`, if given, tells where the
+// ground will keep leaves and vines from being placed.
+export function placeTree(set, type, x, y, z, rand, height = treeHeight(type, rand), blocked = null) {
+  for (const p of buildTree(type, x, y, z, rand, height, blocked)) set(p[0], p[1], p[2], p[3], p[4], p[5]);
+}
+
+// The blocks of a tree as [x, y, z, id, overwrite, meta]. The tree is drawn into a buffer first so
+// that leaves too far from a log (which would decay, or float on their own) and vines left hanging
+// from nothing are dropped before anything reaches the world.
+export function buildTree(type, x, y, z, rand, height = treeHeight(type, rand), blocked = null) {
+  // Keys are offsets from the trunk base (trees stay within +-32 blocks).
+  const key = (bx, by, bz) => ((bx - x + 32) * 64 + (by - y + 32)) * 64 + (bz - z + 32);
+  const parts = new Map();
+  const put = (bx, by, bz, id, overwrite, meta = 0) => {
+    const k = key(bx, by, bz);
+    if (!overwrite && parts.has(k)) return;
+    parts.set(k, [bx, by, bz, id, overwrite, meta]);
+  };
+  drawTree(put, type, x, y, z, rand, height);
+  if (blocked) {
+    for (const [k, p] of parts) if (!p[4] && blocked(p[0], p[1], p[2])) parts.delete(k);
+  }
+
+  const isLeaf = (p) => p && !p[4] && p[3] !== B.VINE;
+  // Leaves within reach of a log, found by walking out from the logs.
+  const kept = new Set();
+  let frontier = [];
+  for (const p of parts.values()) if (p[4]) frontier.push(p);
+  for (let d = 1; d <= LEAF_REACH && frontier.length; d++) {
+    const next = [];
+    for (const [px, py, pz] of frontier) {
+      for (const [dx, dy, dz] of NEIGHBOURS) {
+        const k = key(px + dx, py + dy, pz + dz);
+        const n = parts.get(k);
+        if (!isLeaf(n) || kept.has(k)) continue;
+        kept.add(k);
+        next.push(n);
+      }
+    }
+    frontier = next;
+  }
+  // Vines must hang from a log or kept leaf, or from the vine above; check them top down.
+  const vines = [...parts.values()].filter((p) => p[3] === B.VINE).sort((a, b) => b[1] - a[1]);
+  for (const [vx, vy, vz, , , meta] of vines) {
+    const [ox, oz] = DIRS[(meta + 2) & 3];
+    const behind = parts.get(key(vx + ox, vy, vz + oz));
+    const k = key(vx, vy, vz);
+    if ((behind && behind[4]) || kept.has(key(vx + ox, vy, vz + oz)) || kept.has(key(vx, vy + 1, vz))) kept.add(k);
+  }
+  const out = [];
+  for (const [k, p] of parts) if (p[4] || kept.has(k)) out.push(p);
+  return out;
+}
+
+const NEIGHBOURS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+function drawTree(set, type, x, y, z, rand, height) {
   const { log, leaves } = TREE_TYPES[type] || TREE_TYPES.oak;
   const top = y + height - 1;
   switch (type) {
@@ -115,12 +188,17 @@ export function placeTree(set, type, x, y, z, rand, height = treeHeight(type, ra
         const len = 2 + Math.floor(rand() * 2);
         let bx = x;
         let bz = z;
+        let bly = by;
         for (let i = 1; i <= len; i++) {
-          bx = x + Math.round(Math.cos(a) * i);
-          bz = z + Math.round(Math.sin(a) * i);
-          set(bx, by + Math.floor(i / 2), bz, log, true);
+          const nx = x + Math.round(Math.cos(a) * i);
+          const nz = z + Math.round(Math.sin(a) * i);
+          const ny = by + Math.floor(i / 2);
+          logLine(set, log, bx, bly, bz, nx, ny, nz);
+          bx = nx;
+          bz = nz;
+          bly = ny;
         }
-        blob(set, leaves, bx, by + Math.floor(len / 2) + 1, bz, 2.2, rand, 0.7);
+        blob(set, leaves, bx, bly + 1, bz, 2.2, rand, 0.7);
       }
       return;
     }
@@ -132,8 +210,10 @@ export function placeTree(set, type, x, y, z, rand, height = treeHeight(type, ra
       let tz = z;
       for (let ly = y; ly <= top; ly++) {
         if (ly > bendAt && ly < top) {
+          // Step sideways at the level below so the bent trunk stays joined.
           tx += d[0];
           tz += d[1];
+          set(tx, ly - 1, tz, log, true);
         }
         set(tx, ly, tz, log, true);
       }
@@ -156,6 +236,7 @@ export function placeTree(set, type, x, y, z, rand, height = treeHeight(type, ra
         for (let i = 1; i <= 2; i++) {
           bx += e[0];
           bz += e[1];
+          set(bx, by + i - 1, bz, log, true);
           set(bx, by + i, bz, log, true);
         }
         canopy(bx, by + 3, bz);
@@ -184,6 +265,7 @@ export function placeTree(set, type, x, y, z, rand, height = treeHeight(type, ra
         const bx = x + (d[0] > 0 ? 1 : 0) + d[0] * 2;
         const bz = z + (d[1] > 0 ? 1 : 0) + d[1] * 2;
         set(bx - d[0], by, bz - d[1], log, true);
+        set(bx, by, bz, log, true);
         set(bx, by + 1, bz, log, true);
         blob(set, leaves, bx, by + 2, bz, 2.3, rand, 0.5);
       }

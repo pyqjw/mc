@@ -68,6 +68,9 @@ class WorkerPool {
 
 const NEIGHBORS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const SOIL = new Set([B.GRASS, B.DIRT, B.SNOWY_GRASS, B.FARMLAND, B.PODZOL, B.COARSE_DIRT]);
+// Ground for dead bushes (sand, red sand and terracotta, like Minecraft).
+const SANDY = new Set([B.SAND, B.RED_SAND, B.TERRACOTTA, B.WHITE_TERRACOTTA, B.ORANGE_TERRACOTTA, B.YELLOW_TERRACOTTA,
+  B.BROWN_TERRACOTTA, B.RED_TERRACOTTA, B.LIGHT_GRAY_TERRACOTTA]);
 
 export class World {
   constructor({ seed, worldId, storage, scene, materials, workers = true }) {
@@ -289,7 +292,7 @@ export class World {
     if (kind === 'wall') return IS_OPAQUE[Math.max(0, this.getBlock(x + d[0], y, z + d[1]))] === 1;
     if (kind === 'vine') {
       const v = DIRS[attachedDir(meta)];
-      return IS_SOLID[Math.max(0, this.getBlock(x + v[0], y, z + v[1]))] === 1 || this.getBlock(x, y + 1, z) === B.VINE;
+      return IS_SOLID[Math.max(0, this.getBlock(x + v[0], y, z + v[1]))] === 1 || this.vineHangs(x, y, z);
     }
     if (kind === 'torch' && d) return IS_OPAQUE[Math.max(0, this.getBlock(x - d[0], y, z - d[1]))] === 1;
     if (kind === 'torch') {
@@ -305,9 +308,9 @@ export class World {
     switch (kind) {
       case 'soil': return SOIL.has(below);
       case 'farmland': return below === B.FARMLAND;
-      case 'sand': return below === B.SAND || SOIL.has(below);
+      case 'sand': return SANDY.has(below) || SOIL.has(below);
       case 'cactus': {
-        if (below !== B.SAND && below !== B.CACTUS) return false;
+        if (below !== B.SAND && below !== B.RED_SAND && below !== B.CACTUS) return false;
         for (const [dx, , dz] of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
           if (IS_SOLID[Math.max(0, this.getBlock(x + dx, y, z + dz))]) return false;
         }
@@ -344,10 +347,16 @@ export class World {
       case 'water': return below === B.WATER || below === B.ICE;
       case 'vine': {
         const d = DIRS[attachedDir(this.getMeta(x, y, z))];
-        return IS_SOLID[Math.max(0, this.getBlock(x + d[0], y, z + d[1]))] === 1 || this.getBlock(x, y + 1, z) === B.VINE;
+        return IS_SOLID[Math.max(0, this.getBlock(x + d[0], y, z + d[1]))] === 1 || this.vineHangs(x, y, z);
       }
       default: return true;
     }
+  }
+
+  // A vine can also hang from the vine or the leaves above it.
+  vineHangs(x, y, z) {
+    const up = this.getBlock(x, y + 1, z);
+    return up === B.VINE || (up > 0 && BLOCKS[up].leaves === true);
   }
 
   // Opens or closes a door (both halves). Returns the new open state.
